@@ -58,6 +58,41 @@ namespace SynoAI.Tests
         }
 
         [Test]
+        public void DressImage_ReturnsNullForOversizedSnapshot()
+        {
+            Configure(new Dictionary<string, string>
+            {
+                ["MaxSnapshotBytes"] = "2"
+            });
+
+            ProcessedImage processedImage = SnapshotManager.DressImage(
+                new Camera { Name = "Entree" },
+                new byte[] { 1, 2, 3 },
+                Array.Empty<AIPrediction>(),
+                Array.Empty<AIPrediction>(),
+                NullLogger.Instance);
+
+            Assert.That(processedImage, Is.Null);
+        }
+
+        [Test]
+        public void SaveOriginalImage_DoesNotWriteOversizedSnapshot()
+        {
+            Configure(new Dictionary<string, string>
+            {
+                ["MaxSnapshotBytes"] = "2"
+            });
+
+            string filePath = SnapshotManager.SaveOriginalImage(
+                NullLogger.Instance,
+                new Camera { Name = "Entree" },
+                new byte[] { 1, 2, 3 });
+
+            Assert.That(filePath, Is.Null);
+            Assert.That(Directory.Exists(Constants.DIRECTORY_CAPTURES), Is.False);
+        }
+
+        [Test]
         public void DressImage_SavesCaptureInSafeCameraDirectory()
         {
             ProcessedImage processedImage = SnapshotManager.DressImage(
@@ -123,6 +158,26 @@ namespace SynoAI.Tests
             Assert.That(processedImage.FilePath, Does.Contain(Path.Combine("Captures", "Door_1", expectedDatePath)));
             Assert.That(processedImage.RelativePath, Does.Contain(expectedDatePath));
             Assert.That(File.Exists(processedImage.FilePath), Is.True);
+        }
+
+        private static void Configure(Dictionary<string, string> overrides)
+        {
+            Dictionary<string, string> values = new()
+            {
+                ["AI:Url"] = "http://codeproject-ai:32168",
+                ["OutputJpegQuality"] = "90"
+            };
+
+            foreach (KeyValuePair<string, string> pair in overrides)
+            {
+                values[pair.Key] = pair.Value;
+            }
+
+            IConfiguration configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(values)
+                .Build();
+
+            Config.Generate(NullLogger.Instance, configuration);
         }
 
         private static byte[] CreateJpeg(int width, int height)

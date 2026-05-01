@@ -80,6 +80,11 @@ before it downloads and sends the video. For one camera, setting it close to
 `RecordingClipDurationMs` gives Surveillance Station time to make the requested
 duration available.
 
+`MaxSnapshotBytes`, `MaxAIResponseBytes`, and `MaxRecordingClipBytes` bound
+untrusted Synology and AI responses before they are decoded, parsed, or written
+to disk. Keep the defaults unless your cameras legitimately produce larger
+files.
+
 ## 3. AI Settings
 
 The provided compose file runs CodeProject.AI Server internally as
@@ -94,6 +99,9 @@ Recommended default:
   "Path": "v1/vision/custom/ipcam-general"
 }
 ```
+
+`AI:Path` and `AI:FaceRecognitionPath` must be relative paths. Do not set them
+to full URLs; use `AI:Url` for the detector host.
 
 Useful tuning options:
 

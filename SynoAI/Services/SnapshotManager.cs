@@ -23,6 +23,12 @@ namespace SynoAI.Services
         /// <param name="validPredictions">The list of predictions with the right size and matching the type of objects of interest for this camera.</param>
         public static ProcessedImage DressImage(Camera camera, byte[] snapshot, IEnumerable<AIPrediction> predictions, IEnumerable<AIPrediction> validPredictions, ILogger logger)
         {
+            if (!IsSnapshotSizeAllowed(snapshot))
+            {
+                logger.LogWarning($"{camera.Name}: Snapshot exceeds configured size limit.");
+                return null;
+            }
+
             Stopwatch stopwatch = Stopwatch.StartNew();
             List<AIPrediction> predictionList = predictions as List<AIPrediction> ?? predictions.ToList();
             List<AIPrediction> validPredictionList = validPredictions as List<AIPrediction> ?? validPredictions.ToList();
@@ -165,6 +171,12 @@ namespace SynoAI.Services
         /// <param name="snapshot">The image to save.</param>
         public static string SaveOriginalImage(ILogger logger, Camera camera, byte[] snapshot)
         {
+            if (!IsSnapshotSizeAllowed(snapshot))
+            {
+                logger.LogWarning($"{camera.Name}: Original snapshot exceeds configured size limit and was not saved.");
+                return null;
+            }
+
             Stopwatch stopwatch = Stopwatch.StartNew();
             string filePath = CreateCaptureFilePath(logger, camera, "Original");
             logger.LogInformation($"{camera}: Saving original image to '{filePath}'.");
@@ -276,6 +288,11 @@ namespace SynoAI.Services
             {
                 return null;
             }
+        }
+
+        internal static bool IsSnapshotSizeAllowed(byte[] snapshot)
+        {
+            return snapshot != null && (Config.MaxSnapshotBytes <= 0 || snapshot.Length <= Config.MaxSnapshotBytes);
         }
 
 

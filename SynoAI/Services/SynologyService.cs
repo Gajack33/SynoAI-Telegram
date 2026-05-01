@@ -88,7 +88,14 @@ namespace SynoAI.Services
                             _logger.LogError($"API: {API_LOGIN} only supports a max version of {loginInfo.MaxVersion}, but the system is set to use version {Config.ApiVersionAuth}.");
                         }
 
-                        _loginPath = loginInfo.Path;
+                        if (TryNormalizeApiPath(loginInfo.Path, out string loginPath))
+                        {
+                            _loginPath = loginPath;
+                        }
+                        else
+                        {
+                            _logger.LogError($"API: Ignoring unsafe path '{loginInfo.Path}' for {API_LOGIN}.");
+                        }
                     }
                     else
                     {
@@ -105,7 +112,14 @@ namespace SynoAI.Services
                             _logger.LogError($"API: {API_CAMERA} only supports a max version of {cameraInfo.MaxVersion}, but the system is set to use version {Config.ApiVersionCamera}.");
                         }
 
-                        _cameraPath = cameraInfo.Path;
+                        if (TryNormalizeApiPath(cameraInfo.Path, out string cameraPath))
+                        {
+                            _cameraPath = cameraPath;
+                        }
+                        else
+                        {
+                            _logger.LogError($"API: Ignoring unsafe path '{cameraInfo.Path}' for {API_CAMERA}.");
+                        }
                     }
                     else
                     {
@@ -116,7 +130,14 @@ namespace SynoAI.Services
                     if (response.Data.TryGetValue(API_RECORDING, out SynologyApiInfo recordingInfo))
                     {
                         _logger.LogDebug($"API: Found path '{recordingInfo.Path}' for {API_RECORDING}");
-                        _recordingPath = recordingInfo.Path;
+                        if (TryNormalizeApiPath(recordingInfo.Path, out string recordingPath))
+                        {
+                            _recordingPath = recordingPath;
+                        }
+                        else
+                        {
+                            _logger.LogWarning($"API: Ignoring unsafe path '{recordingInfo.Path}' for {API_RECORDING}.");
+                        }
                     }
                     else
                     {
@@ -344,10 +365,28 @@ namespace SynoAI.Services
                 _logger.LogError($"{cameraName}: Failed to download recording clip with HTTP status code '{downloadResponse.StatusCode}'");
                 return null;
             }
+            if (Config.MaxRecordingClipBytes > 0 &&
+                downloadResponse.Content.Headers.ContentLength.HasValue &&
+                downloadResponse.Content.Headers.ContentLength.Value > Config.MaxRecordingClipBytes)
+            {
+                _logger.LogWarning(
+                    "{cameraName}: Recording clip content length {contentLength} exceeds configured limit {maxRecordingClipBytes}.",
+                    cameraName,
+                    downloadResponse.Content.Headers.ContentLength.Value,
+                    Config.MaxRecordingClipBytes);
+                return null;
+            }
 
             using Stream input = await downloadResponse.Content.ReadAsStreamAsync();
             using FileStream output = File.Create(filePath);
-            await input.CopyToAsync(output);
+            bool copied = await CopyToFileWithLimitAsync(input, output, Config.MaxRecordingClipBytes);
+            if (!copied)
+            {
+                _logger.LogWarning($"{cameraName}: Downloaded recording clip exceeded the configured size limit.");
+                output.Dispose();
+                File.Delete(filePath);
+                return null;
+            }
 
             FileInfo file = new(filePath);
             if (file.Length == 0)
@@ -399,7 +438,7 @@ namespace SynoAI.Services
                         {
                             // Only return the bytes when we have a valid image back
                             _logger.LogDebug($"{cameraName}: Reading snapshot");
-                            return await response.Content.ReadAsByteArrayAsync();
+                            return await ReadSnapshotWithLimitAsync(response.Content, cameraName);
                         }
                         else
                         {
@@ -467,6 +506,91 @@ namespace SynoAI.Services
         internal static string BuildSnapshotResource(string cameraPath, int apiVersionCamera, int cameraId, CameraQuality quality)
         {
             return string.Format(URI_CAMERA_SNAPSHOT, cameraPath, apiVersionCamera, cameraId, (int)quality);
+        }
+
+        internal static bool TryNormalizeApiPath(string path, out string normalizedPath)
+        {
+            normalizedPath = null;
+
+            if (string.IsNullOrWhiteSpace(path) ||
+                path.StartsWith("/", StringComparison.Ordinal) ||
+                path.StartsWith("\\", StringComparison.Ordinal) ||
+                path.Contains('?') ||
+                path.Contains('#') ||
+                Uri.TryCreate(path, UriKind.Absolute, out _))
+            {
+                return false;
+            }
+
+            string[] segments = path.Split(new[] { '/', '\\' }, StringSplitOptions.None);
+            if (segments.Length == 0 || segments.Any(segment => !CaptureFileStore.IsSafePathSegment(segment)))
+            {
+                return false;
+            }
+
+            normalizedPath = string.Join("/", segments);
+            return true;
+        }
+
+        private async Task<byte[]> ReadSnapshotWithLimitAsync(HttpContent content, string cameraName)
+        {
+            if (Config.MaxSnapshotBytes <= 0)
+            {
+                return await content.ReadAsByteArrayAsync();
+            }
+
+            if (content.Headers.ContentLength.HasValue && content.Headers.ContentLength.Value > Config.MaxSnapshotBytes)
+            {
+                _logger.LogWarning(
+                    "{cameraName}: Snapshot content length {contentLength} exceeds configured limit {maxSnapshotBytes}.",
+                    cameraName,
+                    content.Headers.ContentLength.Value,
+                    Config.MaxSnapshotBytes);
+                return null;
+            }
+
+            using Stream input = await content.ReadAsStreamAsync();
+            using MemoryStream output = new();
+            byte[] buffer = new byte[81920];
+            int read;
+            long totalRead = 0;
+
+            while ((read = await input.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            {
+                totalRead += read;
+                if (totalRead > Config.MaxSnapshotBytes)
+                {
+                    _logger.LogWarning(
+                        "{cameraName}: Snapshot exceeded configured limit {maxSnapshotBytes}.",
+                        cameraName,
+                        Config.MaxSnapshotBytes);
+                    return null;
+                }
+
+                output.Write(buffer, 0, read);
+            }
+
+            return output.ToArray();
+        }
+
+        private static async Task<bool> CopyToFileWithLimitAsync(Stream input, Stream output, int maxBytes)
+        {
+            byte[] buffer = new byte[81920];
+            int read;
+            long totalRead = 0;
+
+            while ((read = await input.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            {
+                totalRead += read;
+                if (maxBytes > 0 && totalRead > maxBytes)
+                {
+                    return false;
+                }
+
+                await output.WriteAsync(buffer, 0, read);
+            }
+
+            return true;
         }
 
         /// <summary>
