@@ -17,6 +17,8 @@ namespace SynoAI.Tests
             _workspace = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(Path.Combine(_workspace, "Captures", "Driveway"));
             File.WriteAllText(Path.Combine(_workspace, "Captures", "Driveway", "capture.jpeg"), "test");
+            Directory.CreateDirectory(Path.Combine(_workspace, "Captures", "Driveway", "2026", "05", "01"));
+            File.WriteAllText(Path.Combine(_workspace, "Captures", "Driveway", "2026", "05", "01", "nested.jpeg"), "test");
             Directory.CreateDirectory(Path.Combine(_workspace, "Captures", "Door_1"));
             File.WriteAllText(Path.Combine(_workspace, "Captures", "Door_1", "capture.jpeg"), "test");
             Environment.CurrentDirectory = _workspace;
@@ -44,7 +46,7 @@ namespace SynoAI.Tests
         [Test]
         public void TryGetCapturePath_RejectsTraversal()
         {
-            bool found = CaptureFileStore.TryGetCapturePath("Driveway", "..", out string path);
+            bool found = CaptureFileStore.TryGetCapturePath("Driveway", "../capture.jpeg", out string path);
 
             Assert.That(found, Is.False);
             Assert.That(path, Is.Null);
@@ -57,6 +59,16 @@ namespace SynoAI.Tests
 
             Assert.That(found, Is.True);
             Assert.That(path, Does.Contain("Door_1"));
+        }
+
+        [Test]
+        public void TryGetCapturePath_ReturnsNestedCapture()
+        {
+            bool found = CaptureFileStore.TryGetCapturePath("Driveway", "2026/05/01/nested.jpeg", out string path);
+
+            Assert.That(found, Is.True);
+            Assert.That(File.Exists(path), Is.True);
+            Assert.That(path, Does.Contain(Path.Combine("2026", "05", "01")));
         }
 
         [Test]

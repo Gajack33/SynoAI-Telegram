@@ -57,13 +57,24 @@ namespace SynoAI.Tests
                 ["AI:Type"] = "CodeProjectAIServer",
                 ["AI:Url"] = "http://codeproject-ai:32168",
                 ["AI:Path"] = "v1/vision/custom/ipcam-general",
+                ["AI:DetectionMode"] = "FaceRecognition",
+                ["AI:FaceRecognitionPath"] = "v1/vision/face/recognize",
+                ["AI:FaceLabels:pierre-id"] = "Pierre",
                 ["AI:TimeoutSeconds"] = "15",
                 ["AI:FailureDelayMs"] = "45000",
                 ["AI:MaxImageWidth"] = "1280",
-                ["AI:JpegQuality"] = "82"
+                ["AI:JpegQuality"] = "82",
+                ["PerfectShotEnabled"] = "true",
+                ["CapturePathPattern"] = "{camera}/{yyyy}/{MM}/{dd}",
+                ["DuplicateSnapshotIgnoreSeconds"] = "60",
+                ["StationaryObjectIgnoreSeconds"] = "300",
+                ["StationaryObjectMovementThresholdPixels"] = "12"
             });
 
             Assert.That(Config.AIPath, Is.EqualTo("v1/vision/custom/ipcam-general"));
+            Assert.That(Config.AIDetectionMode, Is.EqualTo(SynoAI.AIs.AIDetectionMode.FaceRecognition));
+            Assert.That(Config.AIFaceRecognitionPath, Is.EqualTo("v1/vision/face/recognize"));
+            Assert.That(Config.MapFaceLabel("pierre-id"), Is.EqualTo("Pierre"));
             Assert.That(Config.AITimeoutSeconds, Is.EqualTo(15));
             Assert.That(Config.AIFailureDelayMs, Is.EqualTo(45000));
             Assert.That(Config.AIMaxImageWidth, Is.EqualTo(1280));
@@ -72,6 +83,11 @@ namespace SynoAI.Tests
             Assert.That(Config.HttpRetryDelayMs, Is.EqualTo(250));
             Assert.That(Config.SynologyTimeoutSeconds, Is.EqualTo(20));
             Assert.That(Config.TelegramTimeoutSeconds, Is.EqualTo(120));
+            Assert.That(Config.PerfectShotEnabled, Is.True);
+            Assert.That(Config.CapturePathPattern, Is.EqualTo("{camera}/{yyyy}/{MM}/{dd}"));
+            Assert.That(Config.DuplicateSnapshotIgnoreSeconds, Is.EqualTo(60));
+            Assert.That(Config.StationaryObjectIgnoreSeconds, Is.EqualTo(300));
+            Assert.That(Config.StationaryObjectMovementThresholdPixels, Is.EqualTo(12));
         }
 
         [Test]

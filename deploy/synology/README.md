@@ -97,6 +97,10 @@ Recommended default:
 
 Useful tuning options:
 
+- `AI:DetectionMode`: `ObjectDetection` for normal object labels, or
+  `FaceRecognition` to call `AI:FaceRecognitionPath`.
+- `AI:FaceLabels`: optional mapping from returned face user ids to display
+  names used in camera `Types` and Telegram captions.
 - `AI:TimeoutSeconds`: timeout for AI requests.
 - `AI:FailureDelayMs`: delay after AI failure before accepting another camera
   trigger.
@@ -179,6 +183,11 @@ enabled, SynoAI-Telegram sends a recording clip afterward.
 
 - Too many alerts: increase `Threshold`, `MinSizeX`, `MinSizeY`, or
   `DelayAfterSuccess`.
+- Repeated identical alerts: set `DuplicateSnapshotIgnoreSeconds` or
+  `StationaryObjectIgnoreSeconds`.
+- Better snapshot selection: enable `PerfectShotEnabled` with `MaxSnapshots`
+  greater than `1`.
+- Large capture folders: set `CapturePathPattern` to `{camera}/{yyyy}/{MM}/{dd}`.
 - Missed distant people: reduce `MinSizeX` and `MinSizeY`, or increase
   `AI:MaxImageWidth`.
 - Snapshot too early or late: adjust per-camera `Wait`.

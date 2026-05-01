@@ -91,6 +91,26 @@ namespace SynoAI.Tests
             Assert.That(httpClient.RequestCount, Is.EqualTo(2));
         }
 
+        [Test]
+        public async Task Process_UsesFaceRecognitionPathAndMapsUserId()
+        {
+            ConfigureCodeProjectAI(new Dictionary<string, string>
+            {
+                ["AI:DetectionMode"] = "FaceRecognition",
+                ["AI:FaceRecognitionPath"] = "v1/vision/face/recognize",
+                ["AI:FaceLabels:pierre-id"] = "Pierre"
+            });
+            FakeHttpClient httpClient = new(
+                @"{""success"":true,""predictions"":[{""userid"":""pierre-id"",""confidence"":0.96,""x_min"":10,""y_min"":20,""x_max"":110,""y_max"":220}]}");
+            Shared.HttpClient = httpClient;
+
+            AIPrediction prediction = (await new DeepStackAI().Process(CreateLogger(), CreateCamera(50), new byte[] { 1, 2, 3 })).Single();
+
+            Assert.That(httpClient.RequestUri.AbsolutePath, Is.EqualTo("/v1/vision/face/recognize"));
+            Assert.That(prediction.Label, Is.EqualTo("Pierre"));
+            Assert.That(prediction.Confidence, Is.EqualTo(96));
+        }
+
         private static Camera CreateCamera(decimal threshold)
         {
             return new Camera
@@ -147,6 +167,7 @@ namespace SynoAI.Tests
 
             public TimeSpan Timeout { get; set; }
             public string RequestBody { get; private set; }
+            public Uri RequestUri { get; private set; }
             public int RequestCount { get; private set; }
 
             public Task<HttpResponseMessage> PostAsync(string requestUri, HttpContent content)
@@ -162,6 +183,7 @@ namespace SynoAI.Tests
             public async Task<HttpResponseMessage> PostAsync(Uri requestUri, HttpContent content, CancellationToken cancellationToken)
             {
                 RequestCount++;
+                RequestUri = requestUri;
                 RequestBody = await content.ReadAsStringAsync();
 
                 return _responses.Count > 0

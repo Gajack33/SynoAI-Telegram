@@ -14,13 +14,18 @@ deployment.
 
 - .NET 8 runtime and Docker image.
 - Synology-friendly Docker Compose deployment under `deploy/synology`.
-- CodeProject.AI support through the DeepStack-compatible multipart API.
+- CodeProject.AI support through the DeepStack-compatible multipart API,
+  including optional face recognition routing.
 - Optional DeepStack compatibility for existing setups.
 - Telegram-only notifications through direct Telegram Bot API calls.
 - Telegram forum topic routing globally or per camera.
 - Telegram caption translations through `telegram-translations.json`; English is
   the default and French is included.
 - Optional recording clip delivery after a positive detection.
+- Perfect Shot mode to analyze all configured snapshots and notify the highest
+  confidence match.
+- Duplicate snapshot and stationary object filters to reduce repeated alerts.
+- Date-based capture folders through `CapturePathPattern`.
 - Request authorization with `AccessToken`.
 - Safer capture file serving to prevent path traversal.
 - Health checks for SynoAI-Telegram and CodeProject.AI.
@@ -115,8 +120,19 @@ Important settings are configured in `appsettings.json`:
 - `AI:Url`: detector base URL from inside the SynoAI-Telegram container.
 - `AI:Path`: detector route, such as `v1/vision/custom/ipcam-general` for
   CodeProject.AI.
+- `AI:DetectionMode`: `ObjectDetection` or `FaceRecognition`. Face recognition
+  uses `AI:FaceRecognitionPath` and can map returned user ids through
+  `AI:FaceLabels`.
 - `OutputJpegQuality`: JPEG quality used for saved/Telegram images. Keep `100`
   for best Telegram input quality.
+- `CapturePathPattern`: capture directory pattern. The default is `{camera}`;
+  use `{camera}/{yyyy}/{MM}/{dd}` to keep folders small.
+- `PerfectShotEnabled`: when `true`, SynoAI-Telegram evaluates every
+  `MaxSnapshots` attempt and sends the highest-confidence valid snapshot.
+- `DuplicateSnapshotIgnoreSeconds`: ignores identical snapshot bytes within the
+  configured window. `0` disables this filter.
+- `StationaryObjectIgnoreSeconds`: ignores detections matching recently
+  notified objects in nearly the same position. `0` disables this filter.
 - `Cameras`: camera names and detection thresholds.
 - `Notifiers`: Telegram notification settings.
 - `Language`: optional Telegram notifier language. The default is `en`; use

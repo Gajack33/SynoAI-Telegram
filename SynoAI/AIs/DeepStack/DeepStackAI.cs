@@ -25,11 +25,15 @@ namespace SynoAI.AIs.DeepStack
 
             decimal minConfidence = camera.Threshold / 100m;
 
-            logger.LogDebug($"{camera.Name}: {providerName}: POSTing image with minimum confidence of {minConfidence} ({camera.Threshold}%) to {string.Join("/", Config.AIUrl, Config.AIPath)}.");
+            string aiPath = Config.AIDetectionMode == AIDetectionMode.FaceRecognition
+                ? Config.AIFaceRecognitionPath
+                : Config.AIPath;
+
+            logger.LogDebug($"{camera.Name}: {providerName}: POSTing image with minimum confidence of {minConfidence} ({camera.Threshold}%) to {string.Join("/", Config.AIUrl, aiPath)}.");
 
             try
             {
-                Uri uri = GetUri(Config.AIUrl, Config.AIPath);
+                Uri uri = GetUri(Config.AIUrl, aiPath);
                 int maxAttempts = Config.HttpRetryCount + 1;
                 for (int attempt = 1; attempt <= maxAttempts; attempt++)
                 {
@@ -48,7 +52,7 @@ namespace SynoAI.AIs.DeepStack
                                     .Select(x => new AIPrediction()
                                     {
                                         Confidence = NormaliseConfidenceToPercent(x.Confidence),
-                                        Label = x.Label,
+                                        Label = Config.MapFaceLabel(x.Label),
                                         MaxX = x.MaxX,
                                         MaxY = x.MaxY,
                                         MinX = x.MinX,

@@ -152,8 +152,9 @@ namespace SynoAI.Services
             logger.LogInformation($"{camera.Name}: Finished dressing image boundaries ({stopwatch.ElapsedMilliseconds}ms).");
 
             // Save the image, including the amount of valid predictions as suffix.
-            String filePath = SaveImage(logger, camera, image, validPredictionList.Count.ToString());
-            return new ProcessedImage(filePath);
+            string filePath = SaveImage(logger, camera, image, validPredictionList.Count.ToString());
+            string relativePath = CaptureFileStore.GetRelativePathFromCameraRoot(camera.Name, filePath);
+            return new ProcessedImage(filePath, relativePath);
         }
 
 
@@ -206,8 +207,7 @@ namespace SynoAI.Services
 
         private static string CreateCaptureFilePath(ILogger logger, Camera camera, string suffix = null)
         {
-            string directory = Constants.DIRECTORY_CAPTURES;
-            directory = Path.Combine(directory, CaptureFileStore.ToSafePathSegment(camera.Name));
+            string directory = Path.Combine(Constants.DIRECTORY_CAPTURES, BuildCaptureDirectory(camera));
 
             if (!Directory.Exists(directory))
             {
@@ -240,6 +240,26 @@ namespace SynoAI.Services
 
             string filePath = Path.Combine(directory, fileName);
             return filePath;
+        }
+
+        private static string BuildCaptureDirectory(Camera camera)
+        {
+            DateTime now = DateTime.Now;
+            string pattern = string.IsNullOrWhiteSpace(Config.CapturePathPattern) ? "{camera}" : Config.CapturePathPattern;
+            string expanded = pattern
+                .Replace("{camera}", CaptureFileStore.ToSafePathSegment(camera.Name), StringComparison.OrdinalIgnoreCase)
+                .Replace("{yyyy}", now.ToString("yyyy"), StringComparison.OrdinalIgnoreCase)
+                .Replace("{MM}", now.ToString("MM"), StringComparison.OrdinalIgnoreCase)
+                .Replace("{dd}", now.ToString("dd"), StringComparison.OrdinalIgnoreCase);
+
+            string[] segments = expanded
+                .Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries)
+                .Select(x => CaptureFileStore.ToSafePathSegment(x))
+                .ToArray();
+
+            return segments.Length == 0
+                ? CaptureFileStore.ToSafePathSegment(camera.Name)
+                : Path.Combine(segments);
         }
 
         private static SKBitmap DecodeBitmap(byte[] snapshot)

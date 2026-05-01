@@ -5,6 +5,7 @@ using Microsoft.Extensions.Logging;
 using SynoAI.App;
 using System;
 using System.Collections.Generic;
+using System.Reflection;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -25,6 +26,12 @@ namespace SynoAI.Services
 
         public async Task StartAsync(CancellationToken cancellationToken)
         {
+            Assembly assembly = Assembly.GetExecutingAssembly();
+            string version = assembly.GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion
+                ?? assembly.GetName().Version?.ToString()
+                ?? "unknown";
+            _logger.LogInformation("Starting SynoAI version {version}.", version);
+
             Config.Generate(_logger, _configuration);
             IReadOnlyList<string> configurationErrors = Config.ValidateStartupConfiguration();
             if (configurationErrors.Count > 0)

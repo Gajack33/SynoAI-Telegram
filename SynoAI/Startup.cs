@@ -15,6 +15,7 @@ namespace SynoAI
         public void ConfigureServices(IServiceCollection services)
         {
             services.AddSingleton<ICameraProcessingQueue, CameraProcessingQueue>();
+            services.AddSingleton<IDetectionMemory, DetectionMemory>();
             services.AddScoped<IAIService, AIService>();
             services.AddScoped<ISynologyService, SynologyService>();
             services.AddScoped<ICameraTriggerProcessor, CameraTriggerProcessor>();

@@ -94,6 +94,37 @@ namespace SynoAI.Tests
             Assert.That(File.Exists(processedImage.FilePath), Is.True);
         }
 
+        [Test]
+        public void DressImage_UsesConfiguredCapturePathPattern()
+        {
+            IConfiguration configuration = new ConfigurationBuilder()
+                .AddInMemoryCollection(new Dictionary<string, string>
+                {
+                    ["AI:Url"] = "http://codeproject-ai:32168",
+                    ["CapturePathPattern"] = "{camera}/{yyyy}/{MM}/{dd}"
+                })
+                .Build();
+            Config.Generate(NullLogger.Instance, configuration);
+
+            ProcessedImage processedImage = SnapshotManager.DressImage(
+                new Camera { Name = "Door:1" },
+                CreateJpeg(320, 240),
+                new[]
+                {
+                    new AIPrediction { Label = "person", Confidence = 90, MinX = 10, MinY = 10, MaxX = 80, MaxY = 160 }
+                },
+                new[]
+                {
+                    new AIPrediction { Label = "person", Confidence = 90, MinX = 10, MinY = 10, MaxX = 80, MaxY = 160 }
+                },
+                NullLogger.Instance);
+
+            string expectedDatePath = Path.Combine(DateTime.Now.ToString("yyyy"), DateTime.Now.ToString("MM"), DateTime.Now.ToString("dd"));
+            Assert.That(processedImage.FilePath, Does.Contain(Path.Combine("Captures", "Door_1", expectedDatePath)));
+            Assert.That(processedImage.RelativePath, Does.Contain(expectedDatePath));
+            Assert.That(File.Exists(processedImage.FilePath), Is.True);
+        }
+
         private static byte[] CreateJpeg(int width, int height)
         {
             using SKBitmap bitmap = new(width, height);

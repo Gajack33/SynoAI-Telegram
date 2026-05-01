@@ -16,13 +16,18 @@ namespace SynoAI.Models
         /// The name of the file.
         /// </summary>
         public readonly string FileName;
+        /// <summary>
+        /// Capture path relative to the camera capture directory.
+        /// </summary>
+        public readonly string RelativePath;
 
-        public ProcessedImage(string filePath)
+        public ProcessedImage(string filePath, string relativePath = null)
         {
             if (string.IsNullOrWhiteSpace(filePath)) throw new ArgumentNullException(nameof(filePath));
 
             FilePath = filePath;
             FileName = Path.GetFileName(filePath);
+            RelativePath = string.IsNullOrWhiteSpace(relativePath) ? FileName : relativePath;
         }
 
         /// <summary>

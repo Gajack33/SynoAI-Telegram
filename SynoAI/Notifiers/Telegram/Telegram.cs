@@ -231,9 +231,14 @@ namespace SynoAI.Notifiers.Telegram
                 }
                 else
                 {
+                    string relativePath = string.Join(
+                        "/",
+                        processedImage.RelativePath
+                            .Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries)
+                            .Select(Uri.EscapeDataString));
                     string photoUrl = new Uri(
                         new Uri(PhotoBaseURL.TrimEnd('/') + "/"),
-                        $"Image/{Uri.EscapeDataString(camera.Name)}/{Uri.EscapeDataString(processedImage.FileName)}").ToString();
+                        $"Image/{Uri.EscapeDataString(camera.Name)}/{relativePath}").ToString();
                     form.Add(new StringContent(RequestAuthorization.AppendToken(photoUrl)), "photo");
                 }
 

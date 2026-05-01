@@ -92,12 +92,109 @@ namespace SynoAI.Tests
                 }),
                 synologyService,
                 new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)),
+                new DetectionMemory(),
                 NullLogger<CameraTriggerProcessor>.Instance);
 
             CameraProcessingStatus status = await processor.ProcessAsync("Entree", CancellationToken.None);
 
             Assert.That(status, Is.EqualTo(CameraProcessingStatus.ValidObjectDetected));
             Assert.That(synologyService.ClipDownloadCalls, Is.EqualTo(1));
+            Assert.That(httpClient.Requests.Select(x => x.AbsolutePath), Is.EqualTo(new[] { "/bottoken/sendPhoto" }));
+        }
+
+        [Test]
+        public async Task Processor_PerfectShot_SelectsHighestConfidenceSnapshot()
+        {
+            Configure(new Dictionary<string, string>
+            {
+                ["PerfectShotEnabled"] = "true",
+                ["MaxSnapshots"] = "3",
+                ["DrawMode"] = "Off",
+                ["Notifiers:0:SendRecordingClip"] = "false"
+            });
+
+            FakeHttpClient httpClient = new();
+            Shared.HttpClient = httpClient;
+
+            FakeSynologyService synologyService = new(new[]
+            {
+                CreateJpeg(64, 64, SKColors.Red),
+                CreateJpeg(64, 64, SKColors.Lime),
+                CreateJpeg(64, 64, SKColors.Blue)
+            });
+
+            FakeAIService aiService = new(new[]
+            {
+                new[]
+                {
+                    new AIPrediction { Label = "person", Confidence = 60, MinX = 1, MinY = 1, MaxX = 20, MaxY = 20 }
+                },
+                new[]
+                {
+                    new AIPrediction { Label = "person", Confidence = 95, MinX = 1, MinY = 1, MaxX = 20, MaxY = 20 }
+                },
+                Array.Empty<AIPrediction>()
+            });
+
+            CameraTriggerProcessor processor = new(
+                aiService,
+                synologyService,
+                new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)),
+                new DetectionMemory(),
+                NullLogger<CameraTriggerProcessor>.Instance);
+
+            CameraProcessingStatus status = await processor.ProcessAsync("Entree", CancellationToken.None);
+
+            Assert.That(status, Is.EqualTo(CameraProcessingStatus.ValidObjectDetected));
+            Assert.That(synologyService.SnapshotCalls, Is.EqualTo(3));
+            Assert.That(aiService.ProcessCalls, Is.EqualTo(3));
+            Assert.That(httpClient.Requests.Select(x => x.AbsolutePath), Is.EqualTo(new[] { "/bottoken/sendPhoto" }));
+
+            string savedCapture = Directory.GetFiles(Path.Combine("Captures", "Entree"), "*.jpeg").Single();
+            using SKBitmap bitmap = SKBitmap.Decode(savedCapture);
+            SKColor pixel = bitmap.GetPixel(5, 5);
+            Assert.That(pixel.Green, Is.GreaterThan(pixel.Red));
+            Assert.That(pixel.Green, Is.GreaterThan(pixel.Blue));
+        }
+
+        [Test]
+        public async Task Processor_StationaryObjectFilter_SuppressesRepeatedObject()
+        {
+            Configure(new Dictionary<string, string>
+            {
+                ["StationaryObjectIgnoreSeconds"] = "300",
+                ["StationaryObjectMovementThresholdPixels"] = "20",
+                ["Notifiers:0:SendRecordingClip"] = "false"
+            });
+
+            FakeHttpClient httpClient = new();
+            Shared.HttpClient = httpClient;
+
+            DetectionMemory detectionMemory = new();
+            FakeAIService aiService = new(new[]
+            {
+                new[]
+                {
+                    new AIPrediction { Label = "person", Confidence = 90, MinX = 10, MinY = 20, MaxX = 80, MaxY = 160 }
+                }
+            });
+
+            CameraTriggerProcessor processor = new(
+                aiService,
+                new FakeSynologyService(new[]
+                {
+                    CreateJpeg(640, 360, SKColors.White),
+                    CreateJpeg(640, 360, SKColors.LightGray)
+                }),
+                new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)),
+                detectionMemory,
+                NullLogger<CameraTriggerProcessor>.Instance);
+
+            CameraProcessingStatus firstStatus = await processor.ProcessAsync("Entree", CancellationToken.None);
+            CameraProcessingStatus secondStatus = await processor.ProcessAsync("Entree", CancellationToken.None);
+
+            Assert.That(firstStatus, Is.EqualTo(CameraProcessingStatus.ValidObjectDetected));
+            Assert.That(secondStatus, Is.EqualTo(CameraProcessingStatus.NoValidObjectDetected));
             Assert.That(httpClient.Requests.Select(x => x.AbsolutePath), Is.EqualTo(new[] { "/bottoken/sendPhoto" }));
         }
 
@@ -115,7 +212,7 @@ namespace SynoAI.Tests
             };
         }
 
-        private static void Configure()
+        private static void Configure(Dictionary<string, string> overrides = null)
         {
             Dictionary<string, string> values = new()
             {
@@ -135,6 +232,14 @@ namespace SynoAI.Tests
                 ["Notifiers:0:RecordingClipDurationMs"] = "10000"
             };
 
+            if (overrides != null)
+            {
+                foreach (KeyValuePair<string, string> pair in overrides)
+                {
+                    values[pair.Key] = pair.Value;
+                }
+            }
+
             IConfiguration configuration = new ConfigurationBuilder()
                 .AddInMemoryCollection(values)
                 .Build();
@@ -144,9 +249,14 @@ namespace SynoAI.Tests
 
         private static byte[] CreateJpeg(int width, int height)
         {
+            return CreateJpeg(width, height, SKColors.White);
+        }
+
+        private static byte[] CreateJpeg(int width, int height, SKColor color)
+        {
             using SKBitmap bitmap = new(width, height);
             using SKCanvas canvas = new(bitmap);
-            canvas.Clear(SKColors.White);
+            canvas.Clear(color);
 
             using SKImage image = SKImage.FromBitmap(bitmap);
             using SKData data = image.Encode(SKEncodedImageFormat.Jpeg, 100);
@@ -155,16 +265,24 @@ namespace SynoAI.Tests
 
         private sealed class FakeAIService : IAIService
         {
-            private readonly IEnumerable<AIPrediction> _predictions;
+            private readonly Queue<IEnumerable<AIPrediction>> _predictions;
 
             public FakeAIService(IEnumerable<AIPrediction> predictions)
+                : this(new[] { predictions })
             {
-                _predictions = predictions;
             }
+
+            public FakeAIService(IEnumerable<IEnumerable<AIPrediction>> predictions)
+            {
+                _predictions = new Queue<IEnumerable<AIPrediction>>(predictions);
+            }
+
+            public int ProcessCalls { get; private set; }
 
             public Task<IEnumerable<AIPrediction>> ProcessAsync(Camera camera, byte[] image)
             {
-                return Task.FromResult(_predictions);
+                ProcessCalls++;
+                return Task.FromResult(_predictions.Count > 1 ? _predictions.Dequeue() : _predictions.Peek());
             }
 
             public Task<bool> WarmupAsync()
@@ -175,15 +293,21 @@ namespace SynoAI.Tests
 
         private sealed class FakeSynologyService : ISynologyService
         {
-            private readonly byte[] _snapshot;
+            private readonly Queue<byte[]> _snapshots;
 
             public FakeSynologyService(byte[] snapshot)
+                : this(new[] { snapshot })
             {
-                _snapshot = snapshot;
+            }
+
+            public FakeSynologyService(IEnumerable<byte[]> snapshots)
+            {
+                _snapshots = new Queue<byte[]>(snapshots);
             }
 
             public bool ThrowOnClipDownload { get; set; }
             public int ClipDownloadCalls { get; private set; }
+            public int SnapshotCalls { get; private set; }
 
             public Task InitialiseAsync()
             {
@@ -202,7 +326,8 @@ namespace SynoAI.Tests
 
             public Task<byte[]> TakeSnapshotAsync(string cameraName)
             {
-                return Task.FromResult(_snapshot);
+                SnapshotCalls++;
+                return Task.FromResult(_snapshots.Count > 1 ? _snapshots.Dequeue() : _snapshots.Peek());
             }
 
             public Task<ProcessedFile> DownloadLatestRecordingClipAsync(string cameraName, int offsetTimeMs, int playTimeMs)

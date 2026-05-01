@@ -11,14 +11,21 @@ namespace SynoAI.Services
         {
             path = null;
 
-            if (string.IsNullOrWhiteSpace(cameraName) || !IsSafePathSegment(filename))
+            if (string.IsNullOrWhiteSpace(cameraName) || string.IsNullOrWhiteSpace(filename))
+            {
+                return false;
+            }
+
+            string[] filenameSegments = filename
+                .Split(new[] { '/', '\\' }, StringSplitOptions.RemoveEmptyEntries);
+            if (filenameSegments.Length == 0 || filenameSegments.Any(x => !IsSafePathSegment(x)))
             {
                 return false;
             }
 
             string capturesRoot = Path.GetFullPath(Constants.DIRECTORY_CAPTURES);
             string cameraDirectory = Path.GetFullPath(Path.Combine(capturesRoot, ToSafePathSegment(cameraName)));
-            string capturePath = Path.GetFullPath(Path.Combine(cameraDirectory, filename));
+            string capturePath = Path.GetFullPath(Path.Combine(new[] { cameraDirectory }.Concat(filenameSegments).ToArray()));
 
             if (!capturePath.StartsWith(capturesRoot + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
             {
@@ -72,6 +79,20 @@ namespace SynoAI.Services
 
             string safeValue = new string(safeCharacters).Trim('.', ' ');
             return string.IsNullOrWhiteSpace(safeValue) ? fallback : safeValue;
+        }
+
+        public static string GetRelativePathFromCameraRoot(string cameraName, string filePath)
+        {
+            string capturesRoot = Path.GetFullPath(Constants.DIRECTORY_CAPTURES);
+            string cameraDirectory = Path.GetFullPath(Path.Combine(capturesRoot, ToSafePathSegment(cameraName)));
+            string fullPath = Path.GetFullPath(filePath);
+
+            if (!fullPath.StartsWith(cameraDirectory + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase))
+            {
+                return Path.GetFileName(filePath);
+            }
+
+            return Path.GetRelativePath(cameraDirectory, fullPath);
         }
     }
 }

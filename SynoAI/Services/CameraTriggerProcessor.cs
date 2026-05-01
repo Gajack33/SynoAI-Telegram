@@ -17,17 +17,20 @@ namespace SynoAI.Services
         private readonly IAIService _aiService;
         private readonly ISynologyService _synologyService;
         private readonly ICameraProcessingQueue _cameraQueue;
+        private readonly IDetectionMemory _detectionMemory;
         private readonly ILogger<CameraTriggerProcessor> _logger;
 
         public CameraTriggerProcessor(
             IAIService aiService,
             ISynologyService synologyService,
             ICameraProcessingQueue cameraQueue,
+            IDetectionMemory detectionMemory,
             ILogger<CameraTriggerProcessor> logger)
         {
             _aiService = aiService;
             _synologyService = synologyService;
             _cameraQueue = cameraQueue;
+            _detectionMemory = detectionMemory;
             _logger = logger;
         }
 
@@ -52,6 +55,7 @@ namespace SynoAI.Services
 
                 Stopwatch overallStopwatch = Stopwatch.StartNew();
                 int maxSnapshots = camera.GetMaxSnapshots();
+                List<SnapshotCandidate> perfectShotCandidates = new();
                 for (int snapshotCount = 1; snapshotCount <= maxSnapshots; snapshotCount++)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
@@ -81,6 +85,20 @@ namespace SynoAI.Services
                     {
                         _logger.LogWarning(
                             "{cameraName}: Snapshot {snapshotCount} of {maxSnapshots} could not be decoded for preprocessing and was skipped.",
+                            cameraName,
+                            snapshotCount,
+                            maxSnapshots);
+                        continue;
+                    }
+
+                    if (Config.DuplicateSnapshotIgnoreSeconds > 0 &&
+                        _detectionMemory.IsDuplicateSnapshot(
+                            cameraName,
+                            snapshot,
+                            TimeSpan.FromSeconds(Config.DuplicateSnapshotIgnoreSeconds)))
+                    {
+                        _logger.LogInformation(
+                            "{cameraName}: Snapshot {snapshotCount} of {maxSnapshots} is identical to a recent snapshot and was skipped.",
                             cameraName,
                             snapshotCount,
                             maxSnapshots);
@@ -119,6 +137,27 @@ namespace SynoAI.Services
                         maxSizeX,
                         maxSizeY);
 
+                    if (validPredictions.Count > 0 && Config.StationaryObjectIgnoreSeconds > 0)
+                    {
+                        int beforeStationaryFilter = validPredictions.Count;
+                        validPredictions = _detectionMemory
+                            .FilterStationaryPredictions(
+                                cameraName,
+                                validPredictions,
+                                TimeSpan.FromSeconds(Config.StationaryObjectIgnoreSeconds),
+                                Config.StationaryObjectMovementThresholdPixels)
+                            .ToList();
+
+                        if (validPredictions.Count < beforeStationaryFilter)
+                        {
+                            _logger.LogInformation(
+                                "{cameraName}: Ignored {stationaryCount} stationary object(s) seen within the last {ignoreSeconds} seconds.",
+                                cameraName,
+                                beforeStationaryFilter - validPredictions.Count,
+                                Config.StationaryObjectIgnoreSeconds);
+                        }
+                    }
+
                     if (Config.SaveOriginalSnapshot == SaveSnapshotMode.Always ||
                         (Config.SaveOriginalSnapshot == SaveSnapshotMode.WithPredictions && predictionList.Count > 0) ||
                         (Config.SaveOriginalSnapshot == SaveSnapshotMode.WithValidPredictions && validPredictions.Count > 0))
@@ -129,29 +168,47 @@ namespace SynoAI.Services
 
                     if (validPredictions.Count > 0)
                     {
-                        ProcessedImage processedImage = SnapshotManager.DressImage(camera, snapshot, predictionList, validPredictions, _logger);
-                        if (processedImage == null)
+                        SnapshotCandidate candidate = new(
+                            snapshotCount,
+                            snapshot,
+                            predictionList,
+                            validPredictions,
+                            CalculateSnapshotScore(validPredictions));
+
+                        if (Config.PerfectShotEnabled && snapshotCount < maxSnapshots)
                         {
-                            _logger.LogError("{cameraName}: Valid detections were found, but the snapshot could not be annotated.", cameraName);
-                            _cameraQueue.AddCameraDelay(cameraName, Config.AIFailureDelayMs);
-                            return CameraProcessingStatus.ImageAnnotationFailed;
+                            perfectShotCandidates.Add(candidate);
+                            _logger.LogInformation(
+                                "{cameraName}: Snapshot {snapshotCount} of {maxSnapshots} is a Perfect Shot candidate with score {score}.",
+                                cameraName,
+                                snapshotCount,
+                                maxSnapshots,
+                                candidate.Score);
+                            continue;
                         }
 
-                        Notification notification = new()
+                        if (Config.PerfectShotEnabled)
                         {
-                            ProcessedImage = processedImage,
-                            ValidPredictions = validPredictions
-                        };
+                            perfectShotCandidates.Add(candidate);
+                            candidate = SelectPerfectShot(perfectShotCandidates);
+                            _logger.LogInformation(
+                                "{cameraName}: Selected snapshot {snapshotCount} as Perfect Shot from {candidateCount} candidate(s) with score {score}.",
+                                cameraName,
+                                candidate.SnapshotCount,
+                                perfectShotCandidates.Count,
+                                candidate.Score);
+                        }
 
-                        List<INotifier> notifiers = GetMatchingNotifiers(camera, validPredictions.Select(x => x.Label).Distinct().ToList()).ToList();
-                        await SendNotifications(camera, notification, notifiers);
-                        await AttachRecordingClipIfNeeded(camera, notification, notifiers, cancellationToken);
-                        await SendRecordingClipNotifications(camera, notification, notifiers);
+                        CameraProcessingStatus status = await SendValidSnapshotAsync(camera, candidate, cancellationToken);
+                        if (status != CameraProcessingStatus.ValidObjectDetected)
+                        {
+                            return status;
+                        }
 
                         _logger.LogInformation(
                             "{cameraName}: Valid object found in snapshot {snapshotCount} of {maxSnapshots} at EVENT TIME {elapsedMs}ms.",
                             cameraName,
-                            snapshotCount,
+                            candidate.SnapshotCount,
                             maxSnapshots,
                             overallStopwatch.ElapsedMilliseconds);
 
@@ -178,6 +235,33 @@ namespace SynoAI.Services
                     }
 
                     _logger.LogInformation("{cameraName}: Finished snapshot attempt ({elapsedMs}ms).", cameraName, overallStopwatch.ElapsedMilliseconds);
+                }
+
+                if (Config.PerfectShotEnabled && perfectShotCandidates.Count > 0)
+                {
+                    SnapshotCandidate candidate = SelectPerfectShot(perfectShotCandidates);
+                    _logger.LogInformation(
+                        "{cameraName}: Selected snapshot {snapshotCount} as Perfect Shot from {candidateCount} candidate(s) with score {score}.",
+                        cameraName,
+                        candidate.SnapshotCount,
+                        perfectShotCandidates.Count,
+                        candidate.Score);
+
+                    CameraProcessingStatus status = await SendValidSnapshotAsync(camera, candidate, cancellationToken);
+                    if (status != CameraProcessingStatus.ValidObjectDetected)
+                    {
+                        return status;
+                    }
+
+                    _logger.LogInformation(
+                        "{cameraName}: Valid object found in snapshot {snapshotCount} of {maxSnapshots} at EVENT TIME {elapsedMs}ms.",
+                        cameraName,
+                        candidate.SnapshotCount,
+                        maxSnapshots,
+                        overallStopwatch.ElapsedMilliseconds);
+
+                    _cameraQueue.AddCameraDelay(cameraName, camera.GetDelayAfterSuccess());
+                    return CameraProcessingStatus.ValidObjectDetected;
                 }
 
                 _cameraQueue.AddCameraDelay(cameraName, camera.GetDelay());
@@ -303,6 +387,84 @@ namespace SynoAI.Services
             }
 
             return true;
+        }
+
+        private async Task<CameraProcessingStatus> SendValidSnapshotAsync(
+            Camera camera,
+            SnapshotCandidate candidate,
+            CancellationToken cancellationToken)
+        {
+            ProcessedImage processedImage = SnapshotManager.DressImage(
+                camera,
+                candidate.Snapshot,
+                candidate.Predictions,
+                candidate.ValidPredictions,
+                _logger);
+            if (processedImage == null)
+            {
+                _logger.LogError("{cameraName}: Valid detections were found, but the snapshot could not be annotated.", camera.Name);
+                _cameraQueue.AddCameraDelay(camera.Name, Config.AIFailureDelayMs);
+                return CameraProcessingStatus.ImageAnnotationFailed;
+            }
+
+            Notification notification = new()
+            {
+                ProcessedImage = processedImage,
+                ValidPredictions = candidate.ValidPredictions
+            };
+
+            List<INotifier> notifiers = GetMatchingNotifiers(
+                camera,
+                candidate.ValidPredictions.Select(x => x.Label).Distinct().ToList()).ToList();
+            await SendNotifications(camera, notification, notifiers);
+            _detectionMemory.RememberNotifiedPredictions(camera.Name, candidate.ValidPredictions);
+            await AttachRecordingClipIfNeeded(camera, notification, notifiers, cancellationToken);
+            await SendRecordingClipNotifications(camera, notification, notifiers);
+
+            return CameraProcessingStatus.ValidObjectDetected;
+        }
+
+        private static decimal CalculateSnapshotScore(IEnumerable<AIPrediction> validPredictions)
+        {
+            List<AIPrediction> predictions = validPredictions?.ToList() ?? new List<AIPrediction>();
+            if (predictions.Count == 0)
+            {
+                return 0;
+            }
+
+            return predictions.Max(x => x.Confidence) + predictions.Count / 1000m;
+        }
+
+        private static SnapshotCandidate SelectPerfectShot(IEnumerable<SnapshotCandidate> candidates)
+        {
+            return candidates
+                .OrderByDescending(x => x.Score)
+                .ThenByDescending(x => x.ValidPredictions.Count)
+                .ThenBy(x => x.SnapshotCount)
+                .First();
+        }
+
+        private sealed class SnapshotCandidate
+        {
+            public SnapshotCandidate(
+                int snapshotCount,
+                byte[] snapshot,
+                IReadOnlyList<AIPrediction> predictions,
+                IReadOnlyList<AIPrediction> validPredictions,
+                decimal score)
+            {
+                SnapshotCount = snapshotCount;
+                Snapshot = snapshot;
+                Predictions = predictions;
+                ValidPredictions = validPredictions;
+                Score = score;
+            }
+
+            public int SnapshotCount { get; }
+            public byte[] Snapshot { get; }
+            public IReadOnlyList<AIPrediction> Predictions { get; }
+            public IReadOnlyList<AIPrediction> ValidPredictions { get; }
+            public decimal Score { get; }
         }
 
         private byte[] PreProcessSnapshot(Camera camera, byte[] snapshot)

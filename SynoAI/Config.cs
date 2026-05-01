@@ -100,6 +100,10 @@ namespace SynoAI
         /// </summary>
         public static int MaxSnapshots { get; private set; }
         /// <summary>
+        /// When enabled, all configured snapshots are evaluated and the highest scoring valid snapshot is notified.
+        /// </summary>
+        public static bool PerfectShotEnabled { get; private set; }
+        /// <summary>
         /// Whether this original snapshot generated from the API should be saved to the file system.
         /// </summary>
         public static SaveSnapshotMode SaveOriginalSnapshot { get; private set; }
@@ -112,6 +116,10 @@ namespace SynoAI
         /// The amount of days to keep captured images before automatically deleting them.
         /// </summary>
         public static int DaysToKeepCaptures { get; private set; }
+        /// <summary>
+        /// Relative capture directory pattern. Supported tokens: {camera}, {yyyy}, {MM}, {dd}.
+        /// </summary>
+        public static string CapturePathPattern { get; private set; }
 
         /// <summary>
         /// The artificial intelligence system to process the images with.
@@ -125,6 +133,18 @@ namespace SynoAI
         /// The detector API path to call on the configured AI server.
         /// </summary>
         public static string AIPath { get; private set; }
+        /// <summary>
+        /// The AI endpoint family SynoAI should call.
+        /// </summary>
+        public static AIDetectionMode AIDetectionMode { get; private set; }
+        /// <summary>
+        /// Face recognition endpoint path.
+        /// </summary>
+        public static string AIFaceRecognitionPath { get; private set; }
+        /// <summary>
+        /// User id to display name mappings for face recognition responses.
+        /// </summary>
+        public static IDictionary<string, string> AIFaceLabels { get; private set; }
         /// <summary>
         /// Whether to send a small image through the AI during startup to warm the detector module.
         /// </summary>
@@ -228,6 +248,18 @@ namespace SynoAI
         /// </summary>
         public static int TelegramTimeoutSeconds { get; private set; }
         /// <summary>
+        /// Number of seconds during which an identical snapshot is ignored. 0 disables duplicate snapshot filtering.
+        /// </summary>
+        public static int DuplicateSnapshotIgnoreSeconds { get; private set; }
+        /// <summary>
+        /// Number of seconds during which unchanged detected objects are ignored. 0 disables stationary object filtering.
+        /// </summary>
+        public static int StationaryObjectIgnoreSeconds { get; private set; }
+        /// <summary>
+        /// Pixel tolerance used when comparing current detections against previously notified detections.
+        /// </summary>
+        public static int StationaryObjectMovementThresholdPixels { get; private set; }
+        /// <summary>
         /// Generates the configuration from the provided IConfiguration.
         /// </summary>
         /// <param name="configuration">The configuration from which to pull the values.</param>
@@ -280,16 +312,27 @@ namespace SynoAI
             LabelBelowBox = configuration.GetValue<bool>("LabelBelowBox", false);
             AlternativeLabelling = configuration.GetValue<bool>("AlternativeLabelling", false);
             MaxSnapshots = configuration.GetValue<int>("MaxSnapshots", 1);
+            PerfectShotEnabled = configuration.GetValue<bool>("PerfectShotEnabled", false);
 
             SaveOriginalSnapshot = configuration.GetValue<SaveSnapshotMode>("SaveOriginalSnapshot", SaveSnapshotMode.Off);
             OutputJpegQuality = Math.Clamp(configuration.GetValue<int>("OutputJpegQuality", 90), 1, 100);
 
             DaysToKeepCaptures = configuration.GetValue<int>("DaysToKeepCaptures", 0);
+            CapturePathPattern = configuration.GetValue<string>("CapturePathPattern", "{camera}");
+            DuplicateSnapshotIgnoreSeconds = Math.Max(0, configuration.GetValue<int>("DuplicateSnapshotIgnoreSeconds", 0));
+            StationaryObjectIgnoreSeconds = Math.Max(0, configuration.GetValue<int>("StationaryObjectIgnoreSeconds", 0));
+            StationaryObjectMovementThresholdPixels = Math.Max(0, configuration.GetValue<int>("StationaryObjectMovementThresholdPixels", 25));
 
             IConfigurationSection aiSection = configuration.GetSection("AI");
             AI = aiSection.GetValue<AIType>("Type", AIType.DeepStack);
             AIUrl = aiSection.GetValue<string>("Url");
             AIPath = aiSection.GetValue<string>("Path", "v1/vision/detection");
+            AIDetectionMode = aiSection.GetValue<AIDetectionMode>("DetectionMode", AIDetectionMode.ObjectDetection);
+            AIFaceRecognitionPath = aiSection.GetValue<string>("FaceRecognitionPath", "v1/vision/face/recognize");
+            Dictionary<string, string> faceLabels = aiSection
+                .GetSection("FaceLabels")
+                .Get<Dictionary<string, string>>() ?? new Dictionary<string, string>();
+            AIFaceLabels = new Dictionary<string, string>(faceLabels, StringComparer.OrdinalIgnoreCase);
             AITimeoutSeconds = Math.Max(1, aiSection.GetValue<int?>("TimeoutSeconds") ?? HttpTimeoutSeconds);
             AIFailureDelayMs = Math.Max(0, aiSection.GetValue<int>("FailureDelayMs", 30000));
             AIMaxImageWidth = Math.Max(0, aiSection.GetValue<int>("MaxImageWidth", 0));
@@ -331,6 +374,11 @@ namespace SynoAI
                 if (string.IsNullOrWhiteSpace(AIPath))
                 {
                     errors.Add("AI:Path is required.");
+                }
+
+                if (AIDetectionMode == AIDetectionMode.FaceRecognition && string.IsNullOrWhiteSpace(AIFaceRecognitionPath))
+                {
+                    errors.Add("AI:FaceRecognitionPath is required when AI:DetectionMode is FaceRecognition.");
                 }
             }
 
@@ -375,6 +423,11 @@ namespace SynoAI
             if (MaxSnapshots < 1)
             {
                 errors.Add("MaxSnapshots must be one or greater.");
+            }
+
+            if (string.IsNullOrWhiteSpace(CapturePathPattern))
+            {
+                errors.Add("CapturePathPattern is required.");
             }
 
             if (Delay < 0)
@@ -431,6 +484,20 @@ namespace SynoAI
             }
 
             return errors;
+        }
+
+        public static string MapFaceLabel(string label)
+        {
+            if (AIDetectionMode == AIDetectionMode.FaceRecognition &&
+                !string.IsNullOrWhiteSpace(label) &&
+                AIFaceLabels != null &&
+                AIFaceLabels.TryGetValue(label, out string mappedLabel) &&
+                !string.IsNullOrWhiteSpace(mappedLabel))
+            {
+                return mappedLabel;
+            }
+
+            return label;
         }
 
         private static bool IsValidAbsoluteHttpUri(string value)

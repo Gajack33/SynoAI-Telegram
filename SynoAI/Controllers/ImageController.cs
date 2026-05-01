@@ -9,7 +9,7 @@ namespace SynoAI.Controllers
         /// <summary>
         /// Returns the file for the specified camera.
         /// </summary>
-        [Route("Image/{cameraName}/{filename}")]
+        [Route("Image/{cameraName}/{**filename}")]
         public ActionResult Get(string cameraName, string filename)
         {
             if (!RequestAuthorization.IsAuthorized(Request))
