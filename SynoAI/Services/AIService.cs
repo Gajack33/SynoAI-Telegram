@@ -119,6 +119,12 @@ namespace SynoAI.Services
                 return image;
             }
 
+            if (!SnapshotManager.IsSnapshotSizeAllowed(image))
+            {
+                _logger.LogWarning("{cameraName}: Snapshot exceeds configured size limit. Skipping AI resize.", camera.Name);
+                return image;
+            }
+
             using SKBitmap original = DecodeBitmap(image);
             if (original == null || original.Width <= Config.AIMaxImageWidth)
             {

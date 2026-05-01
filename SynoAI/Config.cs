@@ -260,6 +260,18 @@ namespace SynoAI
         /// </summary>
         public static int StationaryObjectMovementThresholdPixels { get; private set; }
         /// <summary>
+        /// Maximum accepted snapshot size in bytes. 0 disables the limit.
+        /// </summary>
+        public static int MaxSnapshotBytes { get; private set; }
+        /// <summary>
+        /// Maximum accepted AI response size in bytes. 0 disables the limit.
+        /// </summary>
+        public static int MaxAIResponseBytes { get; private set; }
+        /// <summary>
+        /// Maximum accepted Synology recording clip size in bytes. 0 disables the limit.
+        /// </summary>
+        public static int MaxRecordingClipBytes { get; private set; }
+        /// <summary>
         /// Generates the configuration from the provided IConfiguration.
         /// </summary>
         /// <param name="configuration">The configuration from which to pull the values.</param>
@@ -322,6 +334,9 @@ namespace SynoAI
             DuplicateSnapshotIgnoreSeconds = Math.Max(0, configuration.GetValue<int>("DuplicateSnapshotIgnoreSeconds", 0));
             StationaryObjectIgnoreSeconds = Math.Max(0, configuration.GetValue<int>("StationaryObjectIgnoreSeconds", 0));
             StationaryObjectMovementThresholdPixels = Math.Max(0, configuration.GetValue<int>("StationaryObjectMovementThresholdPixels", 25));
+            MaxSnapshotBytes = Math.Max(0, configuration.GetValue<int>("MaxSnapshotBytes", 10 * 1024 * 1024));
+            MaxAIResponseBytes = Math.Max(0, configuration.GetValue<int>("MaxAIResponseBytes", 1024 * 1024));
+            MaxRecordingClipBytes = Math.Max(0, configuration.GetValue<int>("MaxRecordingClipBytes", 50 * 1024 * 1024));
 
             IConfigurationSection aiSection = configuration.GetSection("AI");
             AI = aiSection.GetValue<AIType>("Type", AIType.DeepStack);
@@ -364,6 +379,11 @@ namespace SynoAI
                 errors.Add("Password is required.");
             }
 
+            if (string.IsNullOrWhiteSpace(AccessToken))
+            {
+                errors.Add("AccessToken is required.");
+            }
+
             if (AI == AIType.CodeProjectAIServer || AI == AIType.DeepStack)
             {
                 if (!IsValidAbsoluteHttpUri(AIUrl))
@@ -375,10 +395,18 @@ namespace SynoAI
                 {
                     errors.Add("AI:Path is required.");
                 }
+                else if (!IsValidRelativeHttpPath(AIPath))
+                {
+                    errors.Add("AI:Path must be a relative path.");
+                }
 
                 if (AIDetectionMode == AIDetectionMode.FaceRecognition && string.IsNullOrWhiteSpace(AIFaceRecognitionPath))
                 {
                     errors.Add("AI:FaceRecognitionPath is required when AI:DetectionMode is FaceRecognition.");
+                }
+                else if (AIDetectionMode == AIDetectionMode.FaceRecognition && !IsValidRelativeHttpPath(AIFaceRecognitionPath))
+                {
+                    errors.Add("AI:FaceRecognitionPath must be a relative path.");
                 }
             }
 
@@ -504,6 +532,23 @@ namespace SynoAI
         {
             return Uri.TryCreate(value, UriKind.Absolute, out Uri uri) &&
                    (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+        }
+
+        private static bool IsValidRelativeHttpPath(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value) ||
+                value.StartsWith("/", StringComparison.Ordinal) ||
+                value.StartsWith("\\", StringComparison.Ordinal) ||
+                value.Contains('\\') ||
+                value.Contains('?') ||
+                value.Contains('#') ||
+                Uri.TryCreate(value, UriKind.Absolute, out _))
+            {
+                return false;
+            }
+
+            string[] segments = value.Split('/', StringSplitOptions.None);
+            return segments.All(segment => !string.IsNullOrWhiteSpace(segment) && segment != "." && segment != "..");
         }
 
         private static IEnumerable<Camera> GenerateCameras(ILogger logger, IConfiguration configuration)

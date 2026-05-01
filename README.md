@@ -119,7 +119,7 @@ Important settings are configured in `appsettings.json`:
 - `AI:Type`: `CodeProjectAIServer` or `DeepStack`.
 - `AI:Url`: detector base URL from inside the SynoAI-Telegram container.
 - `AI:Path`: detector route, such as `v1/vision/custom/ipcam-general` for
-  CodeProject.AI.
+  CodeProject.AI. This must be a relative path, not a full URL.
 - `AI:DetectionMode`: `ObjectDetection` or `FaceRecognition`. Face recognition
   uses `AI:FaceRecognitionPath` and can map returned user ids through
   `AI:FaceLabels`.
@@ -133,6 +133,9 @@ Important settings are configured in `appsettings.json`:
   configured window. `0` disables this filter.
 - `StationaryObjectIgnoreSeconds`: ignores detections matching recently
   notified objects in nearly the same position. `0` disables this filter.
+- `MaxSnapshotBytes`, `MaxAIResponseBytes`, and `MaxRecordingClipBytes`: size
+  limits for untrusted Synology/AI responses. Set to `0` only if you explicitly
+  want to disable a limit.
 - `Cameras`: camera names and detection thresholds.
 - `Notifiers`: Telegram notification settings.
 - `Language`: optional Telegram notifier language. The default is `en`; use

@@ -15,7 +15,7 @@ namespace SynoAI.App
         {
             if (string.IsNullOrWhiteSpace(Config.AccessToken))
             {
-                return true;
+                return false;
             }
 
             string suppliedToken = request.Query[TokenQueryName].FirstOrDefault();
