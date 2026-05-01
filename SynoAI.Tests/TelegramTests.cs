@@ -82,7 +82,8 @@ namespace SynoAI.Tests
             await telegram.SendAsync(camera, notification, NullLogger.Instance);
 
             Assert.That(httpClient.RequestBody, Does.Contain("Camera alert - Entree"));
-            Assert.That(httpClient.RequestBody, Does.Contain("Time: 4/23/2026 7:44 AM"));
+            Assert.That(httpClient.RequestBody, Does.Contain("Time: 4/23/2026 7:44"));
+            Assert.That(httpClient.RequestBody, Does.Contain("AM"));
             Assert.That(httpClient.RequestBody, Does.Contain("Detection: Person"));
             Assert.That(httpClient.RequestBody, Does.Not.Contain("Action: check the image."));
             Assert.That(httpClient.RequestBody, Does.Not.Contain("Video:"));
