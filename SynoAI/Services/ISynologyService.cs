@@ -11,5 +11,6 @@ namespace SynoAI.Services
         Task<Cookie> LoginAsync();
         Task<IEnumerable<SynologyCamera>> GetCamerasAsync();
         Task<byte[]> TakeSnapshotAsync(string cameraName);
+        Task<ProcessedFile> DownloadLatestRecordingClipAsync(string cameraName, int offsetTimeMs, int playTimeMs);
     }
 }

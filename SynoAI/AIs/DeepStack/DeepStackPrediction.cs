@@ -1,8 +1,4 @@
-﻿using Newtonsoft.Json;
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
+using Newtonsoft.Json;
 
 namespace SynoAI.AIs.DeepStack
 {
@@ -10,6 +6,13 @@ namespace SynoAI.AIs.DeepStack
     {
         public decimal Confidence { get; set; }
         public string Label { get; set; }
+
+        // CodeProject.AI / DeepStack Face Recognition returns "userid" instead of "label"
+        [JsonProperty("userid")]
+        private string UserId
+        {
+            set { if (!string.IsNullOrWhiteSpace(value)) Label = value; }
+        }
 
         [JsonProperty("x_min")]
         public int MinX { get; set; }

@@ -1,7 +1,3 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
 using Newtonsoft.Json;
 
 namespace SynoAI.Models
@@ -16,7 +12,7 @@ namespace SynoAI.Models
 
         public string GetName()
         {
-            return string.IsNullOrWhiteSpace(NameNew) ? NameOld : NameNew;    
+            return string.IsNullOrWhiteSpace(NameNew) ? NameOld : NameNew;
         }
     }
 }

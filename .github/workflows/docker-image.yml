@@ -1,23 +1,187 @@
-name: Publish Latest Image
+name: Docker
 
-# Only trigger, when the build workflow succeeded
 on:
-  workflow_run:
-    workflows: ["Build"]
-    types:
-      - completed
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 jobs:
-
-  build:
-
+  docker:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v2
-    - name: Build the Docker image
-      run: docker build -t djdd87/synoai:latest SynoAI
-    - name: Login to Docker Hub
-      run: docker login -u="${{ secrets.DOCKERHUB_USERNAME }}" -p="${{ secrets.DOCKERHUB_PASSWORD }}"
-    - name: Publish the Docker image
-      run: docker push djdd87/synoai:latest
+      - uses: actions/checkout@v4
+
+      - name: Validate Synology compose file
+        run: docker compose -f deploy/synology/docker-compose.yml config
+
+      - name: Build Docker image
+        run: docker build -t synoai-telegram:ci SynoAI
+
+      - name: Run Docker smoke test
+        run: |
+          cleanup() {
+            docker rm -f synoai-telegram-ci || true
+            if [ -f "$RUNNER_TEMP/mock_synology.pid" ]; then
+              kill "$(cat "$RUNNER_TEMP/mock_synology.pid")" || true
+            fi
+          }
+          trap cleanup EXIT
+
+          cat > "$RUNNER_TEMP/mock_synology.py" <<'PY'
+          from http.server import BaseHTTPRequestHandler, HTTPServer
+          import json
+
+          class Handler(BaseHTTPRequestHandler):
+              def _json(self, body, status=200, headers=None):
+                  payload = json.dumps(body).encode("utf-8")
+                  self.send_response(status)
+                  self.send_header("Content-Type", "application/json")
+                  self.send_header("Content-Length", str(len(payload)))
+                  if headers:
+                      for key, value in headers.items():
+                          self.send_header(key, value)
+                  self.end_headers()
+                  self.wfile.write(payload)
+
+              def log_message(self, format, *args):
+                  return
+
+              def do_GET(self):
+                  if self.path.startswith("/webapi/query.cgi"):
+                      self._json({
+                          "success": True,
+                          "data": {
+                              "SYNO.API.Auth": {
+                                  "path": "auth.cgi",
+                                  "minVersion": 1,
+                                  "maxVersion": 7,
+                                  "requestFormat": "JSON"
+                              },
+                              "SYNO.SurveillanceStation.Camera": {
+                                  "path": "entry.cgi",
+                                  "minVersion": 1,
+                                  "maxVersion": 9,
+                                  "requestFormat": "JSON"
+                              },
+                              "SYNO.SurveillanceStation.Recording": {
+                                  "path": "entry.cgi",
+                                  "minVersion": 1,
+                                  "maxVersion": 6,
+                                  "requestFormat": "JSON"
+                              }
+                          }
+                      })
+                      return
+
+                  if self.path.startswith("/webapi/entry.cgi"):
+                      self._json({
+                          "success": True,
+                          "data": {
+                              "cameras": [
+                                  {"id": 1, "Name": "Example1"}
+                              ]
+                          }
+                      })
+                      return
+
+                  self._json({"success": False}, status=404)
+
+              def do_POST(self):
+                  if self.path == "/webapi/auth.cgi":
+                      self._json(
+                          {"success": True, "data": {"sid": "ci-session"}},
+                          headers={"Set-Cookie": "id=ci-session; Path=/"}
+                      )
+                      return
+
+                  self._json({"success": False}, status=404)
+
+          HTTPServer(("0.0.0.0", 18080), Handler).serve_forever()
+          PY
+          python3 "$RUNNER_TEMP/mock_synology.py" &
+          echo "$!" > "$RUNNER_TEMP/mock_synology.pid"
+
+          mock_ready=false
+          for attempt in {1..10}; do
+            if curl --fail --silent "http://localhost:18080/webapi/query.cgi?api=SYNO.API.Info&version=1&method=query" > /dev/null; then
+              mock_ready=true
+              break
+            fi
+
+            sleep 1
+          done
+
+          if [ "$mock_ready" != true ]; then
+            exit 1
+          fi
+
+          cat > "$RUNNER_TEMP/appsettings.ci.json" <<'JSON'
+          {
+            "AllowedHosts": "*",
+            "Logging": {
+              "LogLevel": {
+                "Default": "Information",
+                "Microsoft": "Warning",
+                "Microsoft.Hosting.Lifetime": "Information"
+              }
+            },
+            "Url": "http://host.docker.internal:18080",
+            "User": "ci-user",
+            "Password": "ci-password",
+            "AccessToken": "ci-token",
+            "HttpTimeoutSeconds": 5,
+            "HttpRetryCount": 0,
+            "SynologyTimeoutSeconds": 5,
+            "TelegramTimeoutSeconds": 5,
+            "AI": {
+              "Type": "DeepStack",
+              "Url": "http://host.docker.internal:18080",
+              "Path": "v1/vision/detection",
+              "TimeoutSeconds": 5,
+              "WarmupEnabled": false
+            },
+            "Notifiers": [
+              {
+                "Type": "Telegram",
+                "ChatID": "ci-chat",
+                "Token": "ci-token",
+                "Language": "en",
+                "PhotoBaseURL": "",
+                "SendRecordingClip": false
+              }
+            ],
+            "Cameras": [
+              {
+                "Name": "Example1",
+                "Types": [ "Person" ],
+                "Threshold": 50
+              }
+            ]
+          }
+          JSON
+
+          docker run \
+            --detach \
+            --name synoai-telegram-ci \
+            --add-host=host.docker.internal:host-gateway \
+            --publish 18081:8080 \
+            --volume "$RUNNER_TEMP/appsettings.ci.json:/app/appsettings.json:ro" \
+            synoai-telegram:ci
+
+          for attempt in {1..30}; do
+            if curl --fail --silent --show-error http://localhost:18081/health; then
+              exit 0
+            fi
+
+            if ! docker ps --format '{{.Names}}' | grep -q '^synoai-telegram-ci$'; then
+              docker logs synoai-telegram-ci
+              exit 1
+            fi
+
+            sleep 2
+          done
+
+          docker logs synoai-telegram-ci
+          exit 1

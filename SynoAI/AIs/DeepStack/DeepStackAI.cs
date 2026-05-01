@@ -1,14 +1,18 @@
-﻿using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging;
 using Newtonsoft.Json;
 using SynoAI.App;
 using SynoAI.Models;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Net.Http.Headers;
+using System.Threading;
 using System.Threading.Tasks;
+using SynoAI.AIs;
 
 namespace SynoAI.AIs.DeepStack
 {
@@ -17,57 +21,137 @@ namespace SynoAI.AIs.DeepStack
         public async override Task<IEnumerable<AIPrediction>> Process(ILogger logger, Camera camera, byte[] image)
         {
             Stopwatch stopwatch = Stopwatch.StartNew();
+            string providerName = Config.AI == AIType.CodeProjectAIServer ? "CodeProject.AI" : "DeepStackAI";
 
             decimal minConfidence = camera.Threshold / 100m;
 
-            MultipartFormDataContent multipartContent = new()
-            {
-                { new StreamContent(new MemoryStream(image)), "image", "image" },
-                { new StringContent(minConfidence.ToString()), "min_confidence" } // From face detection example - using JSON with MinConfidence didn't always work
-            };
-
-            logger.LogDebug($"{camera.Name}: DeepStackAI: POSTing image with minimum confidence of {minConfidence} ({camera.Threshold}%) to {string.Join("/", Config.AIUrl, Config.AIPath)}.");
-
-            Uri uri = GetUri(Config.AIUrl, Config.AIPath);
+            logger.LogDebug($"{camera.Name}: {providerName}: POSTing image with minimum confidence of {minConfidence} ({camera.Threshold}%) to {string.Join("/", Config.AIUrl, Config.AIPath)}.");
 
             try
             {
-                HttpResponseMessage response = await Shared.HttpClient.PostAsync(uri, multipartContent);
-                if (response.IsSuccessStatusCode)
+                Uri uri = GetUri(Config.AIUrl, Config.AIPath);
+                int maxAttempts = Config.HttpRetryCount + 1;
+                for (int attempt = 1; attempt <= maxAttempts; attempt++)
                 {
-                    DeepStackResponse deepStackResponse = await GetResponse(logger, camera, response);
-                    if (deepStackResponse.Success)
+                    try
                     {
-                        IEnumerable<AIPrediction> predictions = deepStackResponse.Predictions.Where(x => x.Confidence >= minConfidence).Select(x => new AIPrediction()
+                        using MultipartFormDataContent multipartContent = CreateMultipartContent(image, minConfidence);
+                        using CancellationTokenSource cancellationTokenSource = new(TimeSpan.FromSeconds(Config.AITimeoutSeconds));
+                        using HttpResponseMessage response = await Shared.HttpClient.PostAsync(uri, multipartContent, cancellationTokenSource.Token);
+                        if (response.IsSuccessStatusCode)
                         {
-                            Confidence = x.Confidence * 100,
-                            Label = x.Label,
-                            MaxX = x.MaxX,
-                            MaxY = x.MaxY,
-                            MinX = x.MinX,
-                            MinY = x.MinY
-                        }).ToList();
+                            DeepStackResponse deepStackResponse = await GetResponse(logger, camera, providerName, response);
+                            if (deepStackResponse?.Success == true)
+                            {
+                                IEnumerable<AIPrediction> predictions = (deepStackResponse.Predictions ?? Enumerable.Empty<DeepStackPrediction>())
+                                    .Where(x => NormaliseConfidenceToFraction(x.Confidence) >= minConfidence)
+                                    .Select(x => new AIPrediction()
+                                    {
+                                        Confidence = NormaliseConfidenceToPercent(x.Confidence),
+                                        Label = x.Label,
+                                        MaxX = x.MaxX,
+                                        MaxY = x.MaxY,
+                                        MinX = x.MinX,
+                                        MinY = x.MinY
+                                    }).ToList();
 
-                        stopwatch.Stop();
-                        logger.LogInformation($"{camera.Name}: DeepStackAI: Processed successfully ({stopwatch.ElapsedMilliseconds}ms).");
-                        return predictions;
+                                stopwatch.Stop();
+                                logger.LogInformation(
+                                    "{cameraName}: {providerName}: Processed successfully in {elapsedMs}ms. Inference={inferenceMs}ms Process={processMs}ms RoundTrip={roundTripMs}ms Module={moduleName} Provider={executionProvider}",
+                                    camera.Name,
+                                    providerName,
+                                    stopwatch.ElapsedMilliseconds,
+                                    deepStackResponse.InferenceMs,
+                                    deepStackResponse.ProcessMs,
+                                    deepStackResponse.AnalysisRoundTripMs,
+                                    deepStackResponse.ModuleName,
+                                    deepStackResponse.ExecutionProvider);
+                                return predictions;
+                            }
+
+                            string error = deepStackResponse == null
+                                ? "Empty or invalid response."
+                                : string.IsNullOrWhiteSpace(deepStackResponse.Error) ? deepStackResponse.Message : deepStackResponse.Error;
+                            logger.LogWarning($"{camera.Name}: {providerName}: Failed with error '{error ?? "Unknown error"}'.");
+                            return null;
+                        }
+
+                        string responseBody = await response.Content.ReadAsStringAsync();
+                        logger.LogWarning($"{camera.Name}: {providerName}: Failed to call API with HTTP status code '{response.StatusCode}'. Response: {responseBody}");
+                        if (ShouldRetry(response.StatusCode, attempt, maxAttempts))
+                        {
+                            await DelayBeforeRetry(logger, camera, providerName, attempt, maxAttempts);
+                            continue;
+                        }
+
+                        return null;
                     }
-                    else
+                    catch (TaskCanceledException ex) when (attempt < maxAttempts)
                     {
-                        logger.LogWarning($"{camera.Name}: DeepStackAI: Failed with unknown error.");
+                        logger.LogWarning(ex, "{cameraName}: {providerName}: Request timed out on attempt {attempt} of {maxAttempts}.", camera.Name, providerName, attempt, maxAttempts);
+                        await DelayBeforeRetry(logger, camera, providerName, attempt, maxAttempts);
+                    }
+                    catch (HttpRequestException ex) when (attempt < maxAttempts)
+                    {
+                        logger.LogWarning(ex, "{cameraName}: {providerName}: Request failed on attempt {attempt} of {maxAttempts}.", camera.Name, providerName, attempt, maxAttempts);
+                        await DelayBeforeRetry(logger, camera, providerName, attempt, maxAttempts);
                     }
                 }
-                else
-                {
-                    logger.LogWarning($"{camera.Name}: DeepStackAI: Failed to call API with HTTP status code '{response.StatusCode}'.");
-                }
+            }
+            catch (TaskCanceledException ex)
+            {
+                logger.LogError(ex, $"{camera.Name}: {providerName}: Request timed out after {Config.AITimeoutSeconds} seconds.");
             }
             catch (HttpRequestException ex)
             {
-                logger.LogError($"{camera.Name}: DeepStackAI: Failed to call API error '{ex}'.");
+                logger.LogError(ex, $"{camera.Name}: {providerName}: Failed to call API.");
+            }
+            catch (JsonException ex)
+            {
+                logger.LogError(ex, $"{camera.Name}: {providerName}: Failed to parse API response.");
+            }
+            catch (Exception ex) when (ex is ArgumentException || ex is UriFormatException)
+            {
+                logger.LogError(ex, $"{camera.Name}: {providerName}: AI URL is invalid.");
             }
 
             return null;
+        }
+
+        private static MultipartFormDataContent CreateMultipartContent(byte[] image, decimal minConfidence)
+        {
+            StreamContent imageContent = new(new MemoryStream(image));
+            imageContent.Headers.ContentType = new MediaTypeHeaderValue("image/jpeg");
+
+            return new MultipartFormDataContent
+            {
+                { imageContent, "image", "image.jpg" },
+                { new StringContent(minConfidence.ToString(CultureInfo.InvariantCulture)), "min_confidence" }
+            };
+        }
+
+        private static bool ShouldRetry(System.Net.HttpStatusCode statusCode, int attempt, int maxAttempts)
+        {
+            int status = (int)statusCode;
+            return attempt < maxAttempts && (status == 408 || status == 429 || status >= 500);
+        }
+
+        private static async Task DelayBeforeRetry(ILogger logger, Camera camera, string providerName, int attempt, int maxAttempts)
+        {
+            int delayMs = Config.HttpRetryDelayMs * attempt;
+            if (delayMs <= 0)
+            {
+                return;
+            }
+
+            logger.LogInformation(
+                "{cameraName}: {providerName}: Retrying transient failure after {delayMs}ms ({nextAttempt}/{maxAttempts}).",
+                camera.Name,
+                providerName,
+                delayMs,
+                attempt + 1,
+                maxAttempts);
+            await Task.Delay(delayMs);
         }
 
         /// <summary>
@@ -87,12 +171,22 @@ namespace SynoAI.AIs.DeepStack
         /// </summary>
         /// <param name="message">The message to parse.</param>
         /// <returns>A usable object.</returns>
-        private async Task<DeepStackResponse> GetResponse(ILogger logger, Camera camera, HttpResponseMessage message)
+        private async Task<DeepStackResponse> GetResponse(ILogger logger, Camera camera, string providerName, HttpResponseMessage message)
         {
-            string content = await message.Content.ReadAsStringAsync();                
-            logger.LogDebug($"{camera.Name}: DeepStackAI: Responded with {content}.");
+            string content = await message.Content.ReadAsStringAsync();
+            logger.LogDebug($"{camera.Name}: {providerName}: Responded with {content}.");
 
             return JsonConvert.DeserializeObject<DeepStackResponse>(content);
+        }
+
+        private static decimal NormaliseConfidenceToFraction(decimal confidence)
+        {
+            return confidence > 1 ? confidence / 100m : confidence;
+        }
+
+        private static decimal NormaliseConfidenceToPercent(decimal confidence)
+        {
+            return confidence > 1 ? confidence : confidence * 100m;
         }
     }
 }

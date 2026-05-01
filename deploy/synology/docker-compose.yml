@@ -1,0 +1,38 @@
+services:
+  codeproject-ai:
+    image: codeproject/ai-server:2.9.5
+    container_name: codeproject-ai
+    restart: unless-stopped
+    environment:
+      - TZ=UTC
+    volumes:
+      - /volume1/docker/codeproject/data:/etc/codeproject/ai
+      - /volume1/docker/codeproject/modules:/app/modules
+    networks:
+      default:
+        aliases:
+          - deepstack
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://127.0.0.1:32168/v1/status/ping"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+
+  synoai-telegram:
+    image: synoai-telegram:local
+    build:
+      context: ../../SynoAI
+      dockerfile: Dockerfile
+    container_name: synoai-telegram
+    restart: unless-stopped
+    depends_on:
+      codeproject-ai:
+        condition: service_healthy
+    environment:
+      - TZ=UTC
+    ports:
+      - "8080:8080"
+    volumes:
+      - /volume1/docker/synoai-telegram/appsettings.json:/app/appsettings.json:ro
+      - /volume1/docker/synoai-telegram/captures:/app/Captures

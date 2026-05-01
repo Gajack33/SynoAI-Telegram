@@ -1,12 +1,7 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-
 namespace SynoAI.AIs
 {
     /// <summary>
-    /// A list of support AI types.
+    /// A list of supported AI types.
     /// </summary>
     public enum AIType
     {

@@ -1,5 +1,6 @@
-﻿using Microsoft.AspNetCore.Mvc;
-using System.IO;
+using Microsoft.AspNetCore.Mvc;
+using SynoAI.App;
+using SynoAI.Services;
 
 namespace SynoAI.Controllers
 {
@@ -11,10 +12,17 @@ namespace SynoAI.Controllers
         [Route("Image/{cameraName}/{filename}")]
         public ActionResult Get(string cameraName, string filename)
         {
-            // Get and return the original Snapshot
-            string path = Path.Combine(Constants.DIRECTORY_CAPTURES, cameraName, filename);
-            byte[] originalSnapshot = System.IO.File.ReadAllBytes(path);
-            return File(originalSnapshot, "image/jpeg");
+            if (!RequestAuthorization.IsAuthorized(Request))
+            {
+                return Unauthorized();
+            }
+
+            if (!CaptureFileStore.TryGetCapturePath(cameraName, filename, out string path))
+            {
+                return NotFound();
+            }
+
+            return PhysicalFile(path, "image/jpeg");
         }
     }
 }

@@ -3,9 +3,6 @@
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
-SynoAI.sln
-*.md
-
 # User-specific files
 *.rsuser
 *.suo
@@ -37,6 +34,7 @@ bld/
 
 # Visual Studio 2015/2017 cache/options directory
 .vs/
+.vscode/
 # Uncomment if you have tasks that create the project's static files in wwwroot
 #wwwroot/
 
@@ -365,9 +363,26 @@ MigrationBackup/
 FodyWeavers.xsd
 
 # Custom
+**/appsettings.json
 appsettings.Development.json
 appsettings.*.json
+!SynoAI/appsettings.example.json
+!deploy/synology/appsettings.example.json
+deploy/synology/appsettings.json
+.env
+.env.*
+*.pem
+*.key
+secrets/
 PrivateNotes.txt
-Captures
+AGENTS.md
+Captures/
+datastore/
 docker-compose.debug.yml
+docker-compose.local.yml
 .DS_STORE
+
+# Local Synology/SynoAI smoke-test artifacts
+.syno-cookie.tmp
+synology-snapshot-test.jpg
+recording-person-test/

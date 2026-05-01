@@ -1,0 +1,96 @@
+{
+  "en": {
+    "Culture": "en-US",
+    "PhotoCaptionTitle": "Camera alert - {cameraName}",
+    "TimeLabel": "Time",
+    "DetectionLabel": "Detection",
+    "VideoCaption": "Video clip - {cameraName}",
+    "DefaultObject": "Object detected",
+    "DefaultObjectPlural": "Objects",
+    "Labels": {
+      "person": {
+        "Singular": "Person",
+        "Plural": "People"
+      },
+      "car": {
+        "Singular": "Car",
+        "Plural": "Cars"
+      },
+      "truck": {
+        "Singular": "Truck",
+        "Plural": "Trucks"
+      },
+      "bus": {
+        "Singular": "Bus",
+        "Plural": "Buses"
+      },
+      "bicycle": {
+        "Singular": "Bicycle",
+        "Plural": "Bicycles"
+      },
+      "motorbike": {
+        "Singular": "Motorbike",
+        "Plural": "Motorbikes"
+      },
+      "motorcycle": {
+        "Singular": "Motorcycle",
+        "Plural": "Motorcycles"
+      },
+      "cat": {
+        "Singular": "Cat",
+        "Plural": "Cats"
+      },
+      "dog": {
+        "Singular": "Dog",
+        "Plural": "Dogs"
+      }
+    }
+  },
+  "fr": {
+    "Culture": "fr-FR",
+    "PhotoCaptionTitle": "Alerte cam\u00e9ra - {cameraName}",
+    "TimeLabel": "Heure",
+    "DetectionLabel": "D\u00e9tection",
+    "VideoCaption": "Extrait vid\u00e9o - {cameraName}",
+    "DefaultObject": "Objet d\u00e9tect\u00e9",
+    "DefaultObjectPlural": "Objets",
+    "Labels": {
+      "person": {
+        "Singular": "Personne",
+        "Plural": "Personnes"
+      },
+      "car": {
+        "Singular": "Voiture",
+        "Plural": "Voitures"
+      },
+      "truck": {
+        "Singular": "Camion",
+        "Plural": "Camions"
+      },
+      "bus": {
+        "Singular": "Bus",
+        "Plural": "Bus"
+      },
+      "bicycle": {
+        "Singular": "V\u00e9lo",
+        "Plural": "V\u00e9los"
+      },
+      "motorbike": {
+        "Singular": "Moto",
+        "Plural": "Motos"
+      },
+      "motorcycle": {
+        "Singular": "Moto",
+        "Plural": "Motos"
+      },
+      "cat": {
+        "Singular": "Chat",
+        "Plural": "Chats"
+      },
+      "dog": {
+        "Singular": "Chien",
+        "Plural": "Chiens"
+      }
+    }
+  }
+}
