@@ -70,7 +70,10 @@ namespace SynoAI.Tests
                 ["CapturePathPattern"] = "{camera}/{yyyy}/{MM}/{dd}",
                 ["DuplicateSnapshotIgnoreSeconds"] = "60",
                 ["StationaryObjectIgnoreSeconds"] = "300",
-                ["StationaryObjectMovementThresholdPixels"] = "12"
+                ["StationaryObjectMovementThresholdPixels"] = "12",
+                ["MaxSnapshotBytes"] = "1024",
+                ["MaxAIResponseBytes"] = "2048",
+                ["MaxRecordingClipBytes"] = "4096"
             });
 
             Assert.That(Config.AIPath, Is.EqualTo("v1/vision/custom/ipcam-general"));
@@ -92,6 +95,9 @@ namespace SynoAI.Tests
             Assert.That(Config.DuplicateSnapshotIgnoreSeconds, Is.EqualTo(60));
             Assert.That(Config.StationaryObjectIgnoreSeconds, Is.EqualTo(300));
             Assert.That(Config.StationaryObjectMovementThresholdPixels, Is.EqualTo(12));
+            Assert.That(Config.MaxSnapshotBytes, Is.EqualTo(1024));
+            Assert.That(Config.MaxAIResponseBytes, Is.EqualTo(2048));
+            Assert.That(Config.MaxRecordingClipBytes, Is.EqualTo(4096));
         }
 
         [Test]
@@ -118,9 +124,22 @@ namespace SynoAI.Tests
             Assert.That(errors, Does.Contain("Url must be an absolute http or https URL."));
             Assert.That(errors, Does.Contain("User is required."));
             Assert.That(errors, Does.Contain("Password is required."));
+            Assert.That(errors, Does.Contain("AccessToken is required."));
             Assert.That(errors, Does.Contain("AI:Url must be an absolute http or https URL."));
             Assert.That(errors, Does.Contain("Telegram ChatID is required."));
             Assert.That(errors, Does.Contain("Telegram Token is required."));
+        }
+
+        [Test]
+        public void ValidateStartupConfiguration_RejectsAbsoluteAIPaths()
+        {
+            Dictionary<string, string> values = CreateCompleteConfig();
+            values["AI:Path"] = "http://attacker.local/collect";
+            GenerateConfig(values);
+
+            IReadOnlyList<string> errors = Config.ValidateStartupConfiguration();
+
+            Assert.That(errors, Does.Contain("AI:Path must be a relative path."));
         }
 
         private static void GenerateConfig(Dictionary<string, string> values)
@@ -140,6 +159,7 @@ namespace SynoAI.Tests
                 ["Url"] = "http://nas.local:5000",
                 ["User"] = "synoai",
                 ["Password"] = "password",
+                ["AccessToken"] = "secret-token",
                 ["AI:Type"] = "CodeProjectAIServer",
                 ["AI:Url"] = "http://codeproject-ai:32168",
                 ["AI:Path"] = "v1/vision/custom/ipcam-general",

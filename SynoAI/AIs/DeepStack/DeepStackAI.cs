@@ -81,7 +81,7 @@ namespace SynoAI.AIs.DeepStack
                             return null;
                         }
 
-                        string responseBody = await ReadContentAsStringAsync(response.Content, Config.MaxAIResponseBytes);
+                        string responseBody = await ReadResponseContentAsync(response.Content);
                         logger.LogWarning($"{camera.Name}: {providerName}: Failed to call API with HTTP status code '{response.StatusCode}'. Response: {responseBody}");
                         if (ShouldRetry(response.StatusCode, attempt, maxAttempts))
                         {
@@ -117,7 +117,7 @@ namespace SynoAI.AIs.DeepStack
             }
             catch (InvalidDataException ex)
             {
-                logger.LogError(ex, $"{camera.Name}: {providerName}: Response exceeded configured size limits.");
+                logger.LogError(ex, $"{camera.Name}: {providerName}: API response exceeded the configured size limit.");
             }
             catch (Exception ex) when (ex is ArgumentException || ex is UriFormatException)
             {
@@ -171,6 +171,11 @@ namespace SynoAI.AIs.DeepStack
         /// <returns>A <see cref="Uri"/> for the combined base and resource.</returns>
         protected Uri GetUri(string basePath, string resourcePath)
         {
+            if (!IsSafeRelativeResourcePath(resourcePath))
+            {
+                throw new UriFormatException("AI resource path must be relative.");
+            }
+
             Uri baseUri = new(basePath);
             return new Uri(baseUri, resourcePath);
         }
@@ -182,33 +187,56 @@ namespace SynoAI.AIs.DeepStack
         /// <returns>A usable object.</returns>
         private async Task<DeepStackResponse> GetResponse(ILogger logger, Camera camera, string providerName, HttpResponseMessage message)
         {
-            string content = await ReadContentAsStringAsync(message.Content, Config.MaxAIResponseBytes);
+            string content = await ReadResponseContentAsync(message.Content);
             logger.LogDebug($"{camera.Name}: {providerName}: Responded with {content}.");
 
             return JsonConvert.DeserializeObject<DeepStackResponse>(content);
         }
 
-        private static async Task<string> ReadContentAsStringAsync(HttpContent content, long maxBytes)
+        private static bool IsSafeRelativeResourcePath(string resourcePath)
         {
-            if (maxBytes > 0 && content.Headers.ContentLength.HasValue && content.Headers.ContentLength.Value > maxBytes)
+            if (string.IsNullOrWhiteSpace(resourcePath) ||
+                resourcePath.StartsWith("/", StringComparison.Ordinal) ||
+                resourcePath.StartsWith("\\", StringComparison.Ordinal) ||
+                resourcePath.Contains('\\') ||
+                resourcePath.Contains('?') ||
+                resourcePath.Contains('#') ||
+                Uri.TryCreate(resourcePath, UriKind.Absolute, out _))
             {
-                throw new InvalidDataException($"Response content length {content.Headers.ContentLength.Value} exceeds configured limit {maxBytes}.");
+                return false;
             }
 
-            using Stream stream = await content.ReadAsStreamAsync();
+            string[] segments = resourcePath.Split('/', StringSplitOptions.None);
+            return segments.All(segment => !string.IsNullOrWhiteSpace(segment) && segment != "." && segment != "..");
+        }
+
+        private static async Task<string> ReadResponseContentAsync(HttpContent content)
+        {
+            if (Config.MaxAIResponseBytes <= 0)
+            {
+                return await content.ReadAsStringAsync();
+            }
+
+            if (content.Headers.ContentLength.HasValue && content.Headers.ContentLength.Value > Config.MaxAIResponseBytes)
+            {
+                throw new InvalidDataException("AI response content length exceeded the configured limit.");
+            }
+
+            using Stream input = await content.ReadAsStreamAsync();
             using MemoryStream output = new();
             byte[] buffer = new byte[81920];
-            long totalBytes = 0;
-            int bytesRead;
-            while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            int read;
+            long totalRead = 0;
+
+            while ((read = await input.ReadAsync(buffer, 0, buffer.Length)) > 0)
             {
-                totalBytes += bytesRead;
-                if (maxBytes > 0 && totalBytes > maxBytes)
+                totalRead += read;
+                if (totalRead > Config.MaxAIResponseBytes)
                 {
-                    throw new InvalidDataException($"Response exceeded configured limit {maxBytes}.");
+                    throw new InvalidDataException("AI response exceeded the configured limit.");
                 }
 
-                output.Write(buffer, 0, bytesRead);
+                output.Write(buffer, 0, read);
             }
 
             return Encoding.UTF8.GetString(output.ToArray());

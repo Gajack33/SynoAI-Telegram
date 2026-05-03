@@ -96,9 +96,9 @@ namespace SynoAI.Tests
         {
             ConfigureCodeProjectAI(new Dictionary<string, string>
             {
-                ["MaxAIResponseBytes"] = "20"
+                ["MaxAIResponseBytes"] = "4"
             });
-            FakeHttpClient httpClient = new(@"{""success"":true,""predictions"":[]}");
+            FakeHttpClient httpClient = new(@"{""success"":true}");
             Shared.HttpClient = httpClient;
 
             IEnumerable<AIPrediction> predictions = await new DeepStackAI().Process(CreateLogger(), CreateCamera(50), new byte[] { 1, 2, 3 });

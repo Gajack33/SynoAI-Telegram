@@ -42,6 +42,15 @@ namespace SynoAI.Tests
         }
 
         [Test]
+        public void IsAuthorized_RejectsRequestsWhenTokenIsNotConfigured()
+        {
+            ConfigureToken(null);
+            DefaultHttpContext context = new();
+
+            Assert.That(RequestAuthorization.IsAuthorized(context.Request), Is.False);
+        }
+
+        [Test]
         public void AppendToken_AddsConfiguredTokenToUrl()
         {
             string url = RequestAuthorization.AppendToken("http://synoai.local/Image/Cam/capture.jpeg?width=300");

@@ -66,5 +66,26 @@ namespace SynoAI.Tests
 
             Assert.That(start, Is.EqualTo(DateTimeOffset.FromUnixTimeSeconds(1414680551)));
         }
+
+        [Test]
+        public void TryNormalizeApiPath_AllowsRelativeSynologyApiPath()
+        {
+            bool result = SynologyService.TryNormalizeApiPath("entry.cgi", out string normalizedPath);
+
+            Assert.That(result, Is.True);
+            Assert.That(normalizedPath, Is.EqualTo("entry.cgi"));
+        }
+
+        [TestCase("http://attacker.local/auth.cgi")]
+        [TestCase("//attacker.local/auth.cgi")]
+        [TestCase("../auth.cgi")]
+        [TestCase("auth.cgi?api=evil")]
+        public void TryNormalizeApiPath_RejectsUnsafeSynologyApiPath(string path)
+        {
+            bool result = SynologyService.TryNormalizeApiPath(path, out string normalizedPath);
+
+            Assert.That(result, Is.False);
+            Assert.That(normalizedPath, Is.Null);
+        }
     }
 }

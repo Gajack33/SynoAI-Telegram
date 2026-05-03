@@ -59,10 +59,6 @@ namespace SynoAI.Services
                 var aiService = scope.ServiceProvider.GetRequiredService<IAIService>();
 
                 List<Task> initializationTasks = new List<Task>();
-                if (string.IsNullOrWhiteSpace(Config.AccessToken))
-                {
-                    _logger.LogWarning("AccessToken is not configured. SynoAI endpoints will accept unauthenticated LAN requests.");
-                }
                 initializationTasks.Add(aiService.WarmupAsync());
                 initializationTasks.Add(synologyService.InitialiseAsync());
 
