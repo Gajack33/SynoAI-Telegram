@@ -79,6 +79,7 @@ namespace SynoAI.Services
                         snapshotCount,
                         maxSnapshots,
                         overallStopwatch.ElapsedMilliseconds);
+                    DateTimeOffset snapshotCapturedAt = DateTimeOffset.Now;
 
                     snapshot = PreProcessSnapshot(camera, snapshot);
                     if (snapshot == null)
@@ -170,6 +171,7 @@ namespace SynoAI.Services
                     {
                         SnapshotCandidate candidate = new(
                             snapshotCount,
+                            snapshotCapturedAt,
                             snapshot,
                             predictionList,
                             validPredictions,
@@ -409,6 +411,7 @@ namespace SynoAI.Services
 
             Notification notification = new()
             {
+                CreatedAt = candidate.CapturedAt.LocalDateTime,
                 ProcessedImage = processedImage,
                 ValidPredictions = candidate.ValidPredictions
             };
@@ -418,7 +421,7 @@ namespace SynoAI.Services
                 candidate.ValidPredictions.Select(x => x.Label).Distinct().ToList()).ToList();
             await SendNotifications(camera, notification, notifiers);
             _detectionMemory.RememberNotifiedPredictions(camera.Name, candidate.ValidPredictions);
-            await AttachRecordingClipIfNeeded(camera, notification, notifiers, cancellationToken);
+            await AttachRecordingClipIfNeeded(camera, candidate.CapturedAt, notification, notifiers, cancellationToken);
             await SendRecordingClipNotifications(camera, notification, notifiers);
 
             return CameraProcessingStatus.ValidObjectDetected;
@@ -448,12 +451,14 @@ namespace SynoAI.Services
         {
             public SnapshotCandidate(
                 int snapshotCount,
+                DateTimeOffset capturedAt,
                 byte[] snapshot,
                 IReadOnlyList<AIPrediction> predictions,
                 IReadOnlyList<AIPrediction> validPredictions,
                 decimal score)
             {
                 SnapshotCount = snapshotCount;
+                CapturedAt = capturedAt;
                 Snapshot = snapshot;
                 Predictions = predictions;
                 ValidPredictions = validPredictions;
@@ -461,6 +466,7 @@ namespace SynoAI.Services
             }
 
             public int SnapshotCount { get; }
+            public DateTimeOffset CapturedAt { get; }
             public byte[] Snapshot { get; }
             public IReadOnlyList<AIPrediction> Predictions { get; }
             public IReadOnlyList<AIPrediction> ValidPredictions { get; }
@@ -559,6 +565,7 @@ namespace SynoAI.Services
 
         private async Task AttachRecordingClipIfNeeded(
             Camera camera,
+            DateTimeOffset detectedAt,
             Notification notification,
             IEnumerable<INotifier> notifiers,
             CancellationToken cancellationToken)
@@ -586,6 +593,7 @@ namespace SynoAI.Services
 
                 notification.RecordingClip = await _synologyService.DownloadLatestRecordingClipAsync(
                     camera.Name,
+                    detectedAt,
                     recordingClipNotifier.RecordingClipOffsetMs,
                     recordingClipNotifier.RecordingClipDurationMs);
             }

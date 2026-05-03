@@ -68,6 +68,9 @@ through a public URL that Telegram can fetch, because Telegram must be able to
 reach `/Image/...` from the internet.
 
 Set `SendRecordingClip` to `true` only after photo notifications are working.
+`RecordingClipOffsetMs` is applied relative to the snapshot where SynoAI detected
+the object when Synology exposes or encodes a recording start time. Use a
+negative value such as `-5000` to start the clip five seconds before detection.
 `RecordingClipDurationMs` supports clips up to `120000` milliseconds. Start at
 60000 milliseconds, then increase if people are still visible at the end of the
 clip. Longer clips may require higher `SynologyTimeoutSeconds` and
@@ -109,6 +112,9 @@ Useful tuning options:
 - `AI:JpegQuality`: JPEG quality for the resized AI input.
 - `AI:WarmupEnabled`: keeps the first real motion event from paying the model
   startup cost.
+- `MaxAIResponseBytes` and `MaxRecordingClipBytes`: cap unexpectedly large AI
+  responses and video downloads. Set either to `0` only if you intentionally
+  want no size limit.
 
 If the custom IP camera model does not work well for your scene, try
 `v1/vision/detection` and compare the logs.
@@ -194,6 +200,9 @@ enabled, SynoAI-Telegram sends a recording clip afterward.
 - Best Telegram image quality: keep `OutputJpegQuality` at `100`. If uploads
   are too slow, reduce it, lower `RecordingClipDurationMs`, or increase
   `TelegramTimeoutSeconds`.
+- Video misses the detected person: set `RecordingClipOffsetMs` to a negative
+  value such as `-5000` and keep `RecordingClipDownloadDelayMs` high enough for
+  Surveillance Station to finish writing the relevant segment.
 - Debug exclusion zones: temporarily enable `DrawExclusions`.
 - Keep `PhotoBaseURL` empty for Telegram; SynoAI-Telegram uploads the photo
   directly.

@@ -12,6 +12,12 @@ namespace SynoAI.Models
         public long SizeByte { get; set; }
         public int Width { get; set; }
         public int Height { get; set; }
+        [JsonProperty("startTime")]
+        public long? StartTimeUnixSeconds { get; set; }
+        [JsonProperty("endTime")]
+        public long? EndTimeUnixSeconds { get; set; }
+        [JsonProperty("stopTime")]
+        public long? StopTimeUnixSeconds { get; set; }
     }
 
     public class SynologyRecordings

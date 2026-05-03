@@ -55,7 +55,7 @@ namespace SynoAI.Notifiers.Telegram
         /// </summary>
         public int RecordingClipDownloadDelayMs { get; set; }
         /// <summary>
-        /// Offset in milliseconds from the start of the latest recording.
+        /// Offset in milliseconds relative to the detected snapshot when recording timestamps are available.
         /// </summary>
         public int RecordingClipOffsetMs { get; set; }
         /// <summary>

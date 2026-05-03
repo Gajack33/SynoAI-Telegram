@@ -92,6 +92,21 @@ namespace SynoAI.Tests
         }
 
         [Test]
+        public async Task Process_ReturnsNullWhenAIResponseExceedsLimit()
+        {
+            ConfigureCodeProjectAI(new Dictionary<string, string>
+            {
+                ["MaxAIResponseBytes"] = "20"
+            });
+            FakeHttpClient httpClient = new(@"{""success"":true,""predictions"":[]}");
+            Shared.HttpClient = httpClient;
+
+            IEnumerable<AIPrediction> predictions = await new DeepStackAI().Process(CreateLogger(), CreateCamera(50), new byte[] { 1, 2, 3 });
+
+            Assert.That(predictions, Is.Null);
+        }
+
+        [Test]
         public async Task Process_UsesFaceRecognitionPathAndMapsUserId()
         {
             ConfigureCodeProjectAI(new Dictionary<string, string>

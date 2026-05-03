@@ -10,6 +10,7 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using SynoAI.AIs;
@@ -80,7 +81,7 @@ namespace SynoAI.AIs.DeepStack
                             return null;
                         }
 
-                        string responseBody = await response.Content.ReadAsStringAsync();
+                        string responseBody = await ReadContentAsStringAsync(response.Content, Config.MaxAIResponseBytes);
                         logger.LogWarning($"{camera.Name}: {providerName}: Failed to call API with HTTP status code '{response.StatusCode}'. Response: {responseBody}");
                         if (ShouldRetry(response.StatusCode, attempt, maxAttempts))
                         {
@@ -113,6 +114,10 @@ namespace SynoAI.AIs.DeepStack
             catch (JsonException ex)
             {
                 logger.LogError(ex, $"{camera.Name}: {providerName}: Failed to parse API response.");
+            }
+            catch (InvalidDataException ex)
+            {
+                logger.LogError(ex, $"{camera.Name}: {providerName}: Response exceeded configured size limits.");
             }
             catch (Exception ex) when (ex is ArgumentException || ex is UriFormatException)
             {
@@ -177,10 +182,36 @@ namespace SynoAI.AIs.DeepStack
         /// <returns>A usable object.</returns>
         private async Task<DeepStackResponse> GetResponse(ILogger logger, Camera camera, string providerName, HttpResponseMessage message)
         {
-            string content = await message.Content.ReadAsStringAsync();
+            string content = await ReadContentAsStringAsync(message.Content, Config.MaxAIResponseBytes);
             logger.LogDebug($"{camera.Name}: {providerName}: Responded with {content}.");
 
             return JsonConvert.DeserializeObject<DeepStackResponse>(content);
+        }
+
+        private static async Task<string> ReadContentAsStringAsync(HttpContent content, long maxBytes)
+        {
+            if (maxBytes > 0 && content.Headers.ContentLength.HasValue && content.Headers.ContentLength.Value > maxBytes)
+            {
+                throw new InvalidDataException($"Response content length {content.Headers.ContentLength.Value} exceeds configured limit {maxBytes}.");
+            }
+
+            using Stream stream = await content.ReadAsStreamAsync();
+            using MemoryStream output = new();
+            byte[] buffer = new byte[81920];
+            long totalBytes = 0;
+            int bytesRead;
+            while ((bytesRead = await stream.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            {
+                totalBytes += bytesRead;
+                if (maxBytes > 0 && totalBytes > maxBytes)
+                {
+                    throw new InvalidDataException($"Response exceeded configured limit {maxBytes}.");
+                }
+
+                output.Write(buffer, 0, bytesRead);
+            }
+
+            return Encoding.UTF8.GetString(output.ToArray());
         }
 
         private static decimal NormaliseConfidenceToFraction(decimal confidence)

@@ -248,6 +248,14 @@ namespace SynoAI
         /// </summary>
         public static int TelegramTimeoutSeconds { get; private set; }
         /// <summary>
+        /// Maximum number of bytes accepted from the AI JSON response. 0 disables the limit.
+        /// </summary>
+        public static long MaxAIResponseBytes { get; private set; }
+        /// <summary>
+        /// Maximum number of bytes accepted for downloaded recording clips. 0 disables the limit.
+        /// </summary>
+        public static long MaxRecordingClipBytes { get; private set; }
+        /// <summary>
         /// Number of seconds during which an identical snapshot is ignored. 0 disables duplicate snapshot filtering.
         /// </summary>
         public static int DuplicateSnapshotIgnoreSeconds { get; private set; }
@@ -278,6 +286,8 @@ namespace SynoAI
             HttpRetryDelayMs = Math.Clamp(configuration.GetValue<int>("HttpRetryDelayMs", 1000), 0, 30000);
             SynologyTimeoutSeconds = Math.Max(1, configuration.GetValue<int?>("SynologyTimeoutSeconds") ?? HttpTimeoutSeconds);
             TelegramTimeoutSeconds = Math.Max(1, configuration.GetValue<int?>("TelegramTimeoutSeconds") ?? HttpTimeoutSeconds);
+            MaxAIResponseBytes = Math.Max(0, configuration.GetValue<long>("MaxAIResponseBytes", 1024 * 1024));
+            MaxRecordingClipBytes = Math.Max(0, configuration.GetValue<long>("MaxRecordingClipBytes", 50L * 1024 * 1024));
 
             ApiVersionAuth = configuration.GetValue<int>("ApiVersionInfo", 6);      // DSM 6.0 beta2
             ApiVersionCamera = configuration.GetValue<int>("ApiVersionCamera", 9);  // Surveillance Station 8.0

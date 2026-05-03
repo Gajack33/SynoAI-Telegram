@@ -1,4 +1,5 @@
-﻿using SynoAI.Models;
+using SynoAI.Models;
+using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Threading.Tasks;
@@ -11,6 +12,6 @@ namespace SynoAI.Services
         Task<Cookie> LoginAsync();
         Task<IEnumerable<SynologyCamera>> GetCamerasAsync();
         Task<byte[]> TakeSnapshotAsync(string cameraName);
-        Task<ProcessedFile> DownloadLatestRecordingClipAsync(string cameraName, int offsetTimeMs, int playTimeMs);
+        Task<ProcessedFile> DownloadLatestRecordingClipAsync(string cameraName, DateTimeOffset detectedAt, int offsetTimeMs, int playTimeMs);
     }
 }
