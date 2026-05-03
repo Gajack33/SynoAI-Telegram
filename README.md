@@ -125,6 +125,8 @@ Important settings are configured in `appsettings.json`:
   `AI:FaceLabels`.
 - `OutputJpegQuality`: JPEG quality used for saved/Telegram images. Keep `100`
   for best Telegram input quality.
+- `MaxAIResponseBytes` / `MaxRecordingClipBytes`: safety limits for detector
+  JSON responses and downloaded recording clips. Set to `0` to disable.
 - `CapturePathPattern`: capture directory pattern. The default is `{camera}`;
   use `{camera}/{yyyy}/{MM}/{dd}` to keep folders small.
 - `PerfectShotEnabled`: when `true`, SynoAI-Telegram evaluates every
@@ -157,16 +159,19 @@ Example Telegram notifier:
   },
   "SendRecordingClip": false,
   "RecordingClipDownloadDelayMs": 30000,
-  "RecordingClipOffsetMs": 0,
+  "RecordingClipOffsetMs": -5000,
   "RecordingClipDurationMs": 60000
 }
 ```
 
-`RecordingClipDurationMs` supports up to `120000` milliseconds. For cameras
-where people are still visible at the end of the clip, increase this value and
-raise `SynologyTimeoutSeconds` / `TelegramTimeoutSeconds` if transfers time out.
-If Telegram receives very short clips, increase `RecordingClipDownloadDelayMs`
-so Surveillance Station has time to write more of the current recording before
+`RecordingClipOffsetMs` is applied relative to the snapshot where SynoAI detected
+the object when Synology exposes or encodes a recording start time. A negative
+value starts the clip before the detection; `-5000` gives five seconds of lead-in.
+`RecordingClipDurationMs` supports up to `120000` milliseconds. For cameras where
+people are still visible at the end of the clip, increase this value and raise
+`SynologyTimeoutSeconds` / `TelegramTimeoutSeconds` if transfers time out. If
+Telegram receives very short clips, increase `RecordingClipDownloadDelayMs` so
+Surveillance Station has time to write more of the current recording before
 SynoAI-Telegram downloads it.
 
 `PhotoBaseURL` should normally stay empty. In that mode SynoAI-Telegram uploads

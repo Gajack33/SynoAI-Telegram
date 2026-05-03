@@ -37,8 +37,10 @@ namespace SynoAI.Services
         private const string URI_LOGIN = "webapi/{0}";
         private const string URI_CAMERA_INFO = "webapi/{0}?api=SYNO.SurveillanceStation.Camera&method=List&version={1}";
         private const string URI_CAMERA_SNAPSHOT = "webapi/{0}?version={1}&id={2}&api=SYNO.SurveillanceStation.Camera&method=GetSnapshot&profileType={3}";
-        private const string URI_RECORDING_LIST = "webapi/{0}?api=SYNO.SurveillanceStation.Recording&method=List&version=6&cameraIds={1}&offset=0&limit=5";
+        private const string URI_RECORDING_LIST = "webapi/{0}?api=SYNO.SurveillanceStation.Recording&method=List&version=6&cameraIds={1}&offset=0&limit={2}&fromTime={3}&toTime=0";
         private const string URI_RECORDING_DOWNLOAD = "webapi/{0}/{1}?api=SYNO.SurveillanceStation.Recording&method=Download&version=6&id={2}&offsetTimeMs={3}&playTimeMs={4}";
+        private const int RecordingListLimit = 20;
+        private const int RecordingLookupBeforeSeconds = 15 * 60;
 
         /// <summary>
         /// Holds the entry point to the SYNO.API.Auth API entry point.
@@ -291,7 +293,7 @@ namespace SynoAI.Services
             return await TakeSnapshotAsync(cameraName, retryAfterLogin: true);
         }
 
-        public async Task<ProcessedFile> DownloadLatestRecordingClipAsync(string cameraName, int offsetTimeMs, int playTimeMs)
+        public async Task<ProcessedFile> DownloadLatestRecordingClipAsync(string cameraName, DateTimeOffset detectedAt, int offsetTimeMs, int playTimeMs)
         {
             if (string.IsNullOrWhiteSpace(_recordingPath))
             {
@@ -321,7 +323,7 @@ namespace SynoAI.Services
                 return null;
             }
 
-            string listResource = string.Format(URI_RECORDING_LIST, _recordingPath, id);
+            string listResource = BuildRecordingListResource(_recordingPath, id, detectedAt);
             using HttpResponseMessage listResponse = await SendWithTransientRetriesAsync(
                 () => client.GetAsync(listResource),
                 "list recordings",
@@ -339,11 +341,33 @@ namespace SynoAI.Services
                 return null;
             }
 
-            SynologyRecording recording = recordingsResponse.Data?.Recordings?.FirstOrDefault();
+            List<SynologyRecording> recordings = recordingsResponse.Data?.Recordings?.ToList() ?? new List<SynologyRecording>();
+            SynologyRecording recording = SelectRecordingForDetection(recordings, detectedAt);
             if (recording == null)
             {
                 _logger.LogInformation($"{cameraName}: No recent recordings found.");
                 return null;
+            }
+
+            int downloadOffsetTimeMs = CalculateRecordingOffsetMs(recording, detectedAt, offsetTimeMs);
+            DateTimeOffset? recordingStart = GetRecordingStartTime(recording);
+            if (recordingStart.HasValue)
+            {
+                _logger.LogInformation(
+                    "{cameraName}: Selected recording {recordingId} starting at {recordingStart} for detection at {detectedAt}. Download offset is {offsetTimeMs}ms.",
+                    cameraName,
+                    recording.Id,
+                    recordingStart.Value.LocalDateTime,
+                    detectedAt.LocalDateTime,
+                    downloadOffsetTimeMs);
+            }
+            else
+            {
+                _logger.LogWarning(
+                    "{cameraName}: Selected recording {recordingId}, but no recording start time could be inferred. Falling back to configured offset {offsetTimeMs}ms.",
+                    cameraName,
+                    recording.Id,
+                    downloadOffsetTimeMs);
             }
 
             string safeCameraName = CaptureFileStore.ToSafePathSegment(cameraName);
@@ -355,7 +379,7 @@ namespace SynoAI.Services
                 ? $"{recording.Id}.mp4"
                 : Path.GetFileName(recording.FilePath);
             string fileName = Uri.EscapeDataString(sourceFileName);
-            string downloadResource = string.Format(URI_RECORDING_DOWNLOAD, _recordingPath, fileName, recording.Id, offsetTimeMs, playTimeMs);
+            string downloadResource = string.Format(URI_RECORDING_DOWNLOAD, _recordingPath, fileName, recording.Id, downloadOffsetTimeMs, playTimeMs);
             using HttpResponseMessage downloadResponse = await SendWithTransientRetriesAsync(
                 () => client.GetAsync(downloadResource, HttpCompletionOption.ResponseHeadersRead),
                 "download recording clip",
@@ -365,14 +389,13 @@ namespace SynoAI.Services
                 _logger.LogError($"{cameraName}: Failed to download recording clip with HTTP status code '{downloadResponse.StatusCode}'");
                 return null;
             }
-            if (Config.MaxRecordingClipBytes > 0 &&
-                downloadResponse.Content.Headers.ContentLength.HasValue &&
-                downloadResponse.Content.Headers.ContentLength.Value > Config.MaxRecordingClipBytes)
+            long? contentLength = downloadResponse.Content.Headers.ContentLength;
+            if (Config.MaxRecordingClipBytes > 0 && contentLength.HasValue && contentLength.Value > Config.MaxRecordingClipBytes)
             {
                 _logger.LogWarning(
-                    "{cameraName}: Recording clip content length {contentLength} exceeds configured limit {maxRecordingClipBytes}.",
+                    "{cameraName}: Recording clip download was rejected because it is {contentLength} bytes, above the configured limit of {maxBytes} bytes.",
                     cameraName,
-                    downloadResponse.Content.Headers.ContentLength.Value,
+                    contentLength.Value,
                     Config.MaxRecordingClipBytes);
                 return null;
             }
@@ -399,6 +422,99 @@ namespace SynoAI.Services
             _logger.LogInformation($"{cameraName}: Downloaded recording clip '{filePath}' ({file.Length} bytes).");
             return new ProcessedFile(filePath);
 
+        }
+
+        internal static string BuildRecordingListResource(string recordingPath, int cameraId, DateTimeOffset detectedAt)
+        {
+            long fromTime = Math.Max(0, detectedAt.ToUnixTimeSeconds() - RecordingLookupBeforeSeconds);
+            return string.Format(URI_RECORDING_LIST, recordingPath, cameraId, RecordingListLimit, fromTime);
+        }
+
+        internal static SynologyRecording SelectRecordingForDetection(IEnumerable<SynologyRecording> recordings, DateTimeOffset detectedAt)
+        {
+            List<SynologyRecording> recordingList = recordings?.ToList() ?? new List<SynologyRecording>();
+            if (recordingList.Count == 0)
+            {
+                return null;
+            }
+
+            SynologyRecording containingRecording = recordingList
+                .Where(x =>
+                {
+                    DateTimeOffset? start = GetRecordingStartTime(x);
+                    DateTimeOffset? end = GetRecordingEndTime(x);
+                    return start.HasValue && end.HasValue && start.Value <= detectedAt && detectedAt <= end.Value;
+                })
+                .OrderByDescending(x => GetRecordingStartTime(x))
+                .FirstOrDefault();
+            if (containingRecording != null)
+            {
+                return containingRecording;
+            }
+
+            SynologyRecording latestStartedBeforeDetection = recordingList
+                .Where(x =>
+                {
+                    DateTimeOffset? start = GetRecordingStartTime(x);
+                    return start.HasValue && start.Value <= detectedAt;
+                })
+                .OrderByDescending(x => GetRecordingStartTime(x))
+                .FirstOrDefault();
+            if (latestStartedBeforeDetection != null)
+            {
+                return latestStartedBeforeDetection;
+            }
+
+            SynologyRecording nearestKnownStart = recordingList
+                .Where(x => GetRecordingStartTime(x).HasValue)
+                .OrderBy(x => Math.Abs((GetRecordingStartTime(x).Value - detectedAt).TotalMilliseconds))
+                .FirstOrDefault();
+
+            return nearestKnownStart ?? recordingList.FirstOrDefault();
+        }
+
+        internal static int CalculateRecordingOffsetMs(SynologyRecording recording, DateTimeOffset detectedAt, int configuredOffsetMs)
+        {
+            DateTimeOffset? recordingStart = GetRecordingStartTime(recording);
+            long offsetMs = configuredOffsetMs;
+            if (recordingStart.HasValue)
+            {
+                offsetMs += (long)(detectedAt - recordingStart.Value).TotalMilliseconds;
+            }
+
+            return (int)Math.Clamp(offsetMs, 0L, int.MaxValue);
+        }
+
+        internal static DateTimeOffset? GetRecordingStartTime(SynologyRecording recording)
+        {
+            if (recording == null)
+            {
+                return null;
+            }
+
+            if (recording.StartTimeUnixSeconds.HasValue && recording.StartTimeUnixSeconds.Value > 0)
+            {
+                return DateTimeOffset.FromUnixTimeSeconds(recording.StartTimeUnixSeconds.Value);
+            }
+
+            string fileName = string.IsNullOrWhiteSpace(recording.FilePath)
+                ? null
+                : Path.GetFileNameWithoutExtension(recording.FilePath);
+            string lastSegment = fileName?.Split('-').LastOrDefault();
+            if (long.TryParse(lastSegment, out long unixSeconds) && unixSeconds > 0)
+            {
+                return DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
+            }
+
+            return null;
+        }
+
+        private static DateTimeOffset? GetRecordingEndTime(SynologyRecording recording)
+        {
+            long? endTimeUnixSeconds = recording?.EndTimeUnixSeconds ?? recording?.StopTimeUnixSeconds;
+            return endTimeUnixSeconds.HasValue && endTimeUnixSeconds.Value > 0
+                ? DateTimeOffset.FromUnixTimeSeconds(endTimeUnixSeconds.Value)
+                : null;
         }
 
         private async Task<byte[]> TakeSnapshotAsync(string cameraName, bool retryAfterLogin)

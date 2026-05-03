@@ -54,6 +54,8 @@ namespace SynoAI.Tests
                 ["HttpRetryDelayMs"] = "250",
                 ["SynologyTimeoutSeconds"] = "20",
                 ["TelegramTimeoutSeconds"] = "120",
+                ["MaxAIResponseBytes"] = "2048",
+                ["MaxRecordingClipBytes"] = "4096",
                 ["AI:Type"] = "CodeProjectAIServer",
                 ["AI:Url"] = "http://codeproject-ai:32168",
                 ["AI:Path"] = "v1/vision/custom/ipcam-general",
@@ -86,6 +88,8 @@ namespace SynoAI.Tests
             Assert.That(Config.HttpRetryDelayMs, Is.EqualTo(250));
             Assert.That(Config.SynologyTimeoutSeconds, Is.EqualTo(20));
             Assert.That(Config.TelegramTimeoutSeconds, Is.EqualTo(120));
+            Assert.That(Config.MaxAIResponseBytes, Is.EqualTo(2048));
+            Assert.That(Config.MaxRecordingClipBytes, Is.EqualTo(4096));
             Assert.That(Config.PerfectShotEnabled, Is.True);
             Assert.That(Config.CapturePathPattern, Is.EqualTo("{camera}/{yyyy}/{MM}/{dd}"));
             Assert.That(Config.DuplicateSnapshotIgnoreSeconds, Is.EqualTo(60));

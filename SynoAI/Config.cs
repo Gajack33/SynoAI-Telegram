@@ -247,7 +247,6 @@ namespace SynoAI
         /// Timeout in seconds for Telegram API calls.
         /// </summary>
         public static int TelegramTimeoutSeconds { get; private set; }
-        /// <summary>
         /// Number of seconds during which an identical snapshot is ignored. 0 disables duplicate snapshot filtering.
         /// </summary>
         public static int DuplicateSnapshotIgnoreSeconds { get; private set; }
