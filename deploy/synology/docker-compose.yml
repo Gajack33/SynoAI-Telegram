@@ -20,10 +20,7 @@ services:
       start_period: 60s
 
   synoai-telegram:
-    image: synoai-telegram:local
-    build:
-      context: ../../SynoAI
-      dockerfile: Dockerfile
+    image: ghcr.io/gajack33/synoai-telegram:latest
     container_name: synoai-telegram
     restart: unless-stopped
     depends_on:
@@ -34,5 +31,5 @@ services:
     ports:
       - "8080:8080"
     volumes:
-      - /volume1/docker/synoai-telegram/appsettings.json:/app/appsettings.json:ro
-      - /volume1/docker/synoai-telegram/captures:/app/Captures
+      - /volume1/docker/synoai/appsettings.json:/app/appsettings.json:ro
+      - /volume1/docker/synoai/captures:/app/Captures
