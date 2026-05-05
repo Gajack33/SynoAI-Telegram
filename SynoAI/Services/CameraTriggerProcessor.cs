@@ -596,6 +596,11 @@ namespace SynoAI.Services
                     detectedAt,
                     recordingClipNotifier.RecordingClipOffsetMs,
                     recordingClipNotifier.RecordingClipDurationMs);
+
+                if (notification.RecordingClip == null)
+                {
+                    _logger.LogWarning("{cameraName}: Recording clip was not available; skipping video notification.", camera.Name);
+                }
             }
             catch (Exception ex)
             {
