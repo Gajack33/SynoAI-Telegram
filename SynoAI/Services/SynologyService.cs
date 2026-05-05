@@ -47,6 +47,8 @@ namespace SynoAI.Services
         private const string URI_RECORDING_DOWNLOAD = "webapi/{0}/{1}?api=SYNO.SurveillanceStation.Recording&method=Download&version=6&id={2}&offsetTimeMs={3}&playTimeMs={4}";
         private const int RecordingListLimit = 20;
         private const int RecordingLookupBeforeSeconds = 15 * 60;
+        private const int MaxRecordingOffsetWithoutEndTimeMs = 24 * 60 * 60 * 1000;
+        private static readonly DateTimeOffset MinimumPlausibleRecordingTime = new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
 
         /// <summary>
         /// Holds the entry point to the SYNO.API.Auth API entry point.
@@ -366,7 +368,25 @@ namespace SynoAI.Services
                 return null;
             }
 
-            int downloadOffsetTimeMs = CalculateRecordingOffsetMs(recording, detectedAt, offsetTimeMs);
+            if (ShouldRetryWithRecentRecordingList(new[] { recording }, recording, detectedAt))
+            {
+                _logger.LogWarning(
+                    "{cameraName}: No usable recording candidate was found for detection at {detectedAt}; skipping video clip download.",
+                    cameraName,
+                    detectedAt.LocalDateTime);
+                return null;
+            }
+
+            if (!TryCalculateRecordingDownloadWindowMs(recording, detectedAt, offsetTimeMs, playTimeMs, out int downloadOffsetTimeMs, out int downloadPlayTimeMs))
+            {
+                _logger.LogWarning(
+                    "{cameraName}: Selected recording {recordingId} produced an implausible download offset for detection at {detectedAt}; skipping video clip download.",
+                    cameraName,
+                    recording.Id,
+                    detectedAt.LocalDateTime);
+                return null;
+            }
+
             DateTimeOffset? recordingStart = GetRecordingStartTime(recording);
             if (recordingStart.HasValue)
             {
@@ -378,13 +398,14 @@ namespace SynoAI.Services
                     detectedAt.LocalDateTime,
                     downloadOffsetTimeMs);
             }
-            else
+
+            if (downloadPlayTimeMs != playTimeMs)
             {
-                _logger.LogWarning(
-                    "{cameraName}: Selected recording {recordingId}, but no recording start time could be inferred. Falling back to configured offset {offsetTimeMs}ms.",
+                _logger.LogInformation(
+                    "{cameraName}: Recording clip duration capped from {requestedPlayTimeMs}ms to {downloadPlayTimeMs}ms because the selected recording ends earlier.",
                     cameraName,
-                    recording.Id,
-                    downloadOffsetTimeMs);
+                    playTimeMs,
+                    downloadPlayTimeMs);
             }
 
             string safeCameraName = CaptureFileStore.ToSafePathSegment(cameraName);
@@ -396,7 +417,7 @@ namespace SynoAI.Services
                 ? $"{recording.Id}.mp4"
                 : Path.GetFileName(recording.FilePath);
             string fileName = Uri.EscapeDataString(sourceFileName);
-            string downloadResource = string.Format(URI_RECORDING_DOWNLOAD, _recordingPath, fileName, recording.Id, downloadOffsetTimeMs, playTimeMs);
+            string downloadResource = string.Format(URI_RECORDING_DOWNLOAD, _recordingPath, fileName, recording.Id, downloadOffsetTimeMs, downloadPlayTimeMs);
             using HttpResponseMessage downloadResponse = await SendWithTransientRetriesAsync(
                 () => client.GetAsync(downloadResource, HttpCompletionOption.ResponseHeadersRead),
                 "download recording clip",
@@ -428,6 +449,8 @@ namespace SynoAI.Services
                 return null;
             }
 
+            await output.FlushAsync();
+            output.Dispose();
             FileInfo file = new(filePath);
             if (file.Length == 0)
             {
@@ -465,10 +488,21 @@ namespace SynoAI.Services
 
             DateTimeOffset? selectedStart = GetRecordingStartTime(selectedRecording);
             DateTimeOffset? selectedEnd = GetRecordingEndTime(selectedRecording);
+            if (!selectedStart.HasValue)
+            {
+                return true;
+            }
+
             if (selectedStart.HasValue && selectedEnd.HasValue &&
                 selectedStart.Value <= detectedAt && detectedAt <= selectedEnd.Value)
             {
                 return false;
+            }
+
+            if (selectedStart.HasValue && !selectedEnd.HasValue &&
+                selectedStart.Value < detectedAt.AddMilliseconds(-MaxRecordingOffsetWithoutEndTimeMs))
+            {
+                return true;
             }
 
             if (selectedStart.HasValue && selectedStart.Value > detectedAt)
@@ -524,14 +558,78 @@ namespace SynoAI.Services
 
         internal static int CalculateRecordingOffsetMs(SynologyRecording recording, DateTimeOffset detectedAt, int configuredOffsetMs)
         {
+            return TryCalculateRecordingOffsetMs(recording, detectedAt, configuredOffsetMs, out int offsetMs)
+                ? offsetMs
+                : 0;
+        }
+
+        internal static bool TryCalculateRecordingOffsetMs(SynologyRecording recording, DateTimeOffset detectedAt, int configuredOffsetMs, out int offsetMs)
+        {
+            return TryCalculateRecordingDownloadWindowMs(
+                recording,
+                detectedAt,
+                configuredOffsetMs,
+                requestedPlayTimeMs: 0,
+                out offsetMs,
+                out _);
+        }
+
+        internal static bool TryCalculateRecordingDownloadWindowMs(
+            SynologyRecording recording,
+            DateTimeOffset detectedAt,
+            int configuredOffsetMs,
+            int requestedPlayTimeMs,
+            out int offsetMs,
+            out int playTimeMs)
+        {
             DateTimeOffset? recordingStart = GetRecordingStartTime(recording);
-            long offsetMs = configuredOffsetMs;
-            if (recordingStart.HasValue)
+            offsetMs = 0;
+            playTimeMs = requestedPlayTimeMs;
+            if (!recordingStart.HasValue || recordingStart.Value > detectedAt)
             {
-                offsetMs += (long)(detectedAt - recordingStart.Value).TotalMilliseconds;
+                return false;
             }
 
-            return (int)Math.Clamp(offsetMs, 0L, int.MaxValue);
+            long calculatedOffsetMs = configuredOffsetMs;
+            calculatedOffsetMs += (long)(detectedAt - recordingStart.Value).TotalMilliseconds;
+
+            if (calculatedOffsetMs <= 0)
+            {
+                calculatedOffsetMs = 0;
+            }
+
+            DateTimeOffset? recordingEnd = GetRecordingEndTime(recording);
+            if (recordingEnd.HasValue)
+            {
+                long recordingDurationMs = (long)(recordingEnd.Value - recordingStart.Value).TotalMilliseconds;
+                if (recordingDurationMs <= 0 || calculatedOffsetMs >= recordingDurationMs)
+                {
+                    return false;
+                }
+
+                if (requestedPlayTimeMs > 0 && calculatedOffsetMs + requestedPlayTimeMs > recordingDurationMs)
+                {
+                    long remainingPlayTimeMs = recordingDurationMs - calculatedOffsetMs;
+                    if (remainingPlayTimeMs <= 0 || remainingPlayTimeMs > int.MaxValue)
+                    {
+                        return false;
+                    }
+
+                    playTimeMs = (int)remainingPlayTimeMs;
+                }
+            }
+            else if (calculatedOffsetMs > MaxRecordingOffsetWithoutEndTimeMs)
+            {
+                return false;
+            }
+
+            if (calculatedOffsetMs > int.MaxValue)
+            {
+                return false;
+            }
+
+            offsetMs = (int)calculatedOffsetMs;
+            return true;
         }
 
         internal static DateTimeOffset? GetRecordingStartTime(SynologyRecording recording)
@@ -541,29 +639,60 @@ namespace SynoAI.Services
                 return null;
             }
 
-            if (recording.StartTimeUnixSeconds.HasValue && recording.StartTimeUnixSeconds.Value > 0)
+            DateTimeOffset? startTime = GetPlausibleUnixTime(recording.StartTimeUnixSeconds);
+            if (startTime.HasValue)
             {
-                return DateTimeOffset.FromUnixTimeSeconds(recording.StartTimeUnixSeconds.Value);
+                return startTime;
             }
 
             string fileName = string.IsNullOrWhiteSpace(recording.FilePath)
                 ? null
                 : Path.GetFileNameWithoutExtension(recording.FilePath);
             string lastSegment = fileName?.Split('-').LastOrDefault();
-            if (long.TryParse(lastSegment, out long unixSeconds) && unixSeconds > 0)
-            {
-                return DateTimeOffset.FromUnixTimeSeconds(unixSeconds);
-            }
-
-            return null;
+            return long.TryParse(lastSegment, out long unixSeconds)
+                ? GetPlausibleUnixTime(unixSeconds)
+                : null;
         }
 
         private static DateTimeOffset? GetRecordingEndTime(SynologyRecording recording)
         {
-            long? endTimeUnixSeconds = recording?.EndTimeUnixSeconds ?? recording?.StopTimeUnixSeconds;
-            return endTimeUnixSeconds.HasValue && endTimeUnixSeconds.Value > 0
-                ? DateTimeOffset.FromUnixTimeSeconds(endTimeUnixSeconds.Value)
-                : null;
+            DateTimeOffset? start = GetRecordingStartTime(recording);
+            DateTimeOffset? end = GetPlausibleUnixTime(recording?.EndTimeUnixSeconds);
+            DateTimeOffset? stop = GetPlausibleUnixTime(recording?.StopTimeUnixSeconds);
+            if (start.HasValue)
+            {
+                if (end.HasValue && end.Value >= start.Value)
+                {
+                    return end;
+                }
+
+                if (stop.HasValue && stop.Value >= start.Value)
+                {
+                    return stop;
+                }
+            }
+
+            return end ?? stop;
+        }
+
+        private static DateTimeOffset? GetPlausibleUnixTime(long? unixSeconds)
+        {
+            if (!unixSeconds.HasValue || unixSeconds.Value <= 0)
+            {
+                return null;
+            }
+
+            try
+            {
+                DateTimeOffset timestamp = DateTimeOffset.FromUnixTimeSeconds(unixSeconds.Value);
+                return timestamp >= MinimumPlausibleRecordingTime
+                    ? timestamp
+                    : null;
+            }
+            catch (ArgumentOutOfRangeException)
+            {
+                return null;
+            }
         }
 
         private async Task<List<SynologyRecording>> TryListRecordingsAsync(
