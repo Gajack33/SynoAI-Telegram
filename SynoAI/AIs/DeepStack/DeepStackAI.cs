@@ -19,6 +19,18 @@ namespace SynoAI.AIs.DeepStack
 {
     public class DeepStackAI : AI
     {
+        private readonly IHttpClient _httpClient;
+
+        public DeepStackAI()
+            : this(new HttpClientWrapper())
+        {
+        }
+
+        public DeepStackAI(IHttpClient httpClient)
+        {
+            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        }
+
         public async override Task<IEnumerable<AIPrediction>> Process(ILogger logger, Camera camera, byte[] image)
         {
             Stopwatch stopwatch = Stopwatch.StartNew();
@@ -42,7 +54,7 @@ namespace SynoAI.AIs.DeepStack
                     {
                         using MultipartFormDataContent multipartContent = CreateMultipartContent(image, minConfidence);
                         using CancellationTokenSource cancellationTokenSource = new(TimeSpan.FromSeconds(Config.AITimeoutSeconds));
-                        using HttpResponseMessage response = await Shared.HttpClient.PostAsync(uri, multipartContent, cancellationTokenSource.Token);
+                        using HttpResponseMessage response = await _httpClient.PostAsync(uri, multipartContent, cancellationTokenSource.Token);
                         if (response.IsSuccessStatusCode)
                         {
                             DeepStackResponse deepStackResponse = await GetResponse(logger, camera, providerName, response);

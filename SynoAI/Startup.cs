@@ -5,7 +5,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.OpenApi;
+using SynoAI.App;
 using SynoAI.Services;
+using System.Net.Http;
 
 namespace SynoAI
 {
@@ -14,10 +16,30 @@ namespace SynoAI
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
+            services.AddHttpClient(HttpClientWrapper.OutboundClientName);
+            services.AddSingleton<IHttpClient, HttpClientWrapper>();
+            services.AddSingleton<SynologyCookieStore>();
+            services.AddHttpClient(SynologyService.HttpClientName)
+                .ConfigurePrimaryHttpMessageHandler(serviceProvider =>
+                {
+                    SynologyCookieStore cookieStore = serviceProvider.GetRequiredService<SynologyCookieStore>();
+                    HttpClientHandler handler = new()
+                    {
+                        CookieContainer = cookieStore.CookieContainer
+                    };
+
+                    if (Config.AllowInsecureUrl)
+                    {
+                        handler.ServerCertificateCustomValidationCallback = (message, cert, chain, sslPolicyErrors) => true;
+                    }
+
+                    return handler;
+                });
+
             services.AddSingleton<ICameraProcessingQueue, CameraProcessingQueue>();
             services.AddSingleton<IDetectionMemory, DetectionMemory>();
             services.AddScoped<IAIService, AIService>();
-            services.AddScoped<ISynologyService, SynologyService>();
+            services.AddSingleton<ISynologyService, SynologyService>();
             services.AddScoped<ICameraTriggerProcessor, CameraTriggerProcessor>();
 
             services.AddHostedService<CaptureCleanupService>();

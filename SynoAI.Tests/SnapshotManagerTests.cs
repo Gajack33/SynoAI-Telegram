@@ -130,6 +130,45 @@ namespace SynoAI.Tests
         }
 
         [Test]
+        public void DressImage_ClampsPredictionCoordinatesToImageBounds()
+        {
+            ProcessedImage processedImage = SnapshotManager.DressImage(
+                new Camera { Name = "Entree" },
+                CreateJpeg(100, 80),
+                new[]
+                {
+                    new AIPrediction { Label = "person", Confidence = 90, MinX = -20, MinY = -10, MaxX = 130, MaxY = 90 }
+                },
+                new[]
+                {
+                    new AIPrediction { Label = "person", Confidence = 90, MinX = -20, MinY = -10, MaxX = 130, MaxY = 90 }
+                },
+                NullLogger.Instance);
+
+            Assert.That(processedImage, Is.Not.Null);
+            Assert.That(File.Exists(processedImage.FilePath), Is.True);
+        }
+
+        [Test]
+        public void DressImage_ReturnsNullWhenValidPredictionCoordinatesAreInvalid()
+        {
+            ProcessedImage processedImage = SnapshotManager.DressImage(
+                new Camera { Name = "Entree" },
+                CreateJpeg(100, 80),
+                new[]
+                {
+                    new AIPrediction { Label = "person", Confidence = 90, MinX = 90, MinY = 10, MaxX = 10, MaxY = 40 }
+                },
+                new[]
+                {
+                    new AIPrediction { Label = "person", Confidence = 90, MinX = 90, MinY = 10, MaxX = 10, MaxY = 40 }
+                },
+                NullLogger.Instance);
+
+            Assert.That(processedImage, Is.Null);
+        }
+
+        [Test]
         public void DressImage_UsesConfiguredCapturePathPattern()
         {
             IConfiguration configuration = new ConfigurationBuilder()

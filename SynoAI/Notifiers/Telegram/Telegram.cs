@@ -22,6 +22,18 @@ namespace SynoAI.Notifiers.Telegram
     /// </summary>
     public class Telegram : NotifierBase, IRecordingClipNotifier
     {
+        private readonly IHttpClient _httpClient;
+
+        public Telegram()
+            : this(new HttpClientWrapper())
+        {
+        }
+
+        public Telegram(IHttpClient httpClient)
+        {
+            _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
+        }
+
         /// <summary>
         /// The ID of the chat to send notifications to
         /// </summary>
@@ -77,19 +89,11 @@ namespace SynoAI.Notifiers.Telegram
                 string cameraName = camera.Name;
                 ProcessedImage processedImage = notification.ProcessedImage;
 
-                try
-                {
-                    string message = GetTelegramMessage(camera, notification);
-                    int? messageThreadId = GetMessageThreadId(camera);
-                    await SendPhotoAsync(camera, processedImage, message, messageThreadId, logger);
+                string message = GetTelegramMessage(camera, notification);
+                int? messageThreadId = GetMessageThreadId(camera);
+                await SendPhotoAsync(camera, processedImage, message, messageThreadId, logger);
 
-                    logger.LogInformation("{cameraName}: Telegram notification sent successfully", cameraName);
-                }
-                catch (Exception ex)
-                {
-                    logger.LogError("{cameraName}: Error occurred sending telegram", cameraName);
-                    logger.LogError(ex, "An exception occurred");
-                }
+                logger.LogInformation("{cameraName}: Telegram notification sent successfully", cameraName);
             }
         }
 
@@ -239,14 +243,14 @@ namespace SynoAI.Notifiers.Telegram
                     string photoUrl = new Uri(
                         new Uri(PhotoBaseURL.TrimEnd('/') + "/"),
                         $"Image/{Uri.EscapeDataString(camera.Name)}/{relativePath}").ToString();
-                    form.Add(new StringContent(RequestAuthorization.AppendToken(photoUrl)), "photo");
+                    form.Add(new StringContent(RequestAuthorization.AppendImageToken(photoUrl)), "photo");
                 }
 
                 return form;
             }, logger);
         }
 
-        private static async Task PostTelegramFormAsync(string url, Func<MultipartFormDataContent> createForm, ILogger logger)
+        private async Task PostTelegramFormAsync(string url, Func<MultipartFormDataContent> createForm, ILogger logger)
         {
             int maxAttempts = Config.HttpRetryCount + 1;
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
@@ -255,7 +259,7 @@ namespace SynoAI.Notifiers.Telegram
                 {
                     using MultipartFormDataContent form = createForm();
                     using CancellationTokenSource cancellationTokenSource = new(TimeSpan.FromSeconds(Config.TelegramTimeoutSeconds));
-                    using HttpResponseMessage response = await SynoAI.App.Shared.HttpClient.PostAsync(new Uri(url), form, cancellationTokenSource.Token);
+                    using HttpResponseMessage response = await _httpClient.PostAsync(new Uri(url), form, cancellationTokenSource.Token);
                     string responseContent = await response.Content.ReadAsStringAsync();
 
                     if (!response.IsSuccessStatusCode)
@@ -267,7 +271,7 @@ namespace SynoAI.Notifiers.Telegram
                             continue;
                         }
 
-                        throw new HttpRequestException($"Telegram responded with HTTP status code '{response.StatusCode}'.");
+                        throw new TelegramApiException($"Telegram responded with HTTP status code '{response.StatusCode}'.");
                     }
 
                     JObject responseJson = JsonConvert.DeserializeObject<JObject>(responseContent);
@@ -291,11 +295,19 @@ namespace SynoAI.Notifiers.Telegram
                     logger.LogWarning(ex, "Telegram request timed out on attempt {attempt} of {maxAttempts}.", attempt, maxAttempts);
                     await DelayBeforeRetry(logger, attempt, maxAttempts);
                 }
-                catch (HttpRequestException ex) when (attempt < maxAttempts)
+                catch (HttpRequestException ex) when (ex is not TelegramApiException && attempt < maxAttempts)
                 {
                     logger.LogWarning(ex, "Telegram request failed on attempt {attempt} of {maxAttempts}.", attempt, maxAttempts);
                     await DelayBeforeRetry(logger, attempt, maxAttempts);
                 }
+            }
+        }
+
+        private sealed class TelegramApiException : HttpRequestException
+        {
+            public TelegramApiException(string message)
+                : base(message)
+            {
             }
         }
 

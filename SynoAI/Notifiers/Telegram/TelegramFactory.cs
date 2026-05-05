@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using SynoAI.App;
 using System;
 using System.Collections.Generic;
 
@@ -12,7 +13,7 @@ namespace SynoAI.Notifiers.Telegram
         internal const int DefaultRecordingClipDownloadDelayMs = 30000;
         internal const int MaxRecordingClipDownloadDelayMs = 300000;
 
-        public override INotifier Create(ILogger logger, IConfigurationSection section)
+        public override INotifier Create(ILogger logger, IConfigurationSection section, IHttpClient httpClient)
         {
             using (logger.BeginScope(nameof(TelegramFactory)))
             {
@@ -51,7 +52,7 @@ namespace SynoAI.Notifiers.Telegram
                         MaxRecordingClipDurationMs);
                 }
 
-                return new Telegram()
+                return new Telegram(httpClient)
                 {
                     ChatID = chatId,
                     Token = token,

@@ -16,13 +16,11 @@ namespace SynoAI.Tests
 {
     public class TelegramTests
     {
-        private IHttpClient _previousHttpClient;
         private string _workspace;
 
         [SetUp]
         public void Setup()
         {
-            _previousHttpClient = Shared.HttpClient;
             _workspace = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_workspace);
             Configure();
@@ -31,7 +29,6 @@ namespace SynoAI.Tests
         [TearDown]
         public void TearDown()
         {
-            Shared.HttpClient = _previousHttpClient;
             if (Directory.Exists(_workspace))
             {
                 Directory.Delete(_workspace, recursive: true);
@@ -45,9 +42,8 @@ namespace SynoAI.Tests
             File.WriteAllBytes(imagePath, new byte[] { 1, 2, 3 });
 
             FakeHttpClient httpClient = new();
-            Shared.HttpClient = httpClient;
 
-            Telegram telegram = new()
+            Telegram telegram = new(httpClient)
             {
                 ChatID = "1",
                 Token = "token"
@@ -99,9 +95,8 @@ namespace SynoAI.Tests
             File.WriteAllBytes(imagePath, new byte[] { 1, 2, 3 });
 
             FakeHttpClient httpClient = new();
-            Shared.HttpClient = httpClient;
 
-            Telegram telegram = new()
+            Telegram telegram = new(httpClient)
             {
                 ChatID = "1",
                 Token = "token",
@@ -144,16 +139,15 @@ namespace SynoAI.Tests
         [Test]
         public async Task SendAsync_UsesImageEndpointWhenPhotoBaseUrlIsConfigured()
         {
-            Configure("secret-token");
+            Configure("action-token", imageAccessToken: "image-token");
 
             FakeHttpClient httpClient = new();
-            Shared.HttpClient = httpClient;
 
-            Telegram telegram = new()
+            Telegram telegram = new(httpClient)
             {
                 ChatID = "1",
                 Token = "token",
-                PhotoBaseURL = "http://synoai.local"
+                PhotoBaseURL = "https://synoai.local"
             };
 
             Notification notification = new()
@@ -172,7 +166,7 @@ namespace SynoAI.Tests
 
             await telegram.SendAsync(new Camera { Name = "Entree" }, notification, NullLogger.Instance);
 
-            Assert.That(httpClient.RequestBody, Does.Contain("http://synoai.local/Image/Entree/capture.jpeg?token=secret-token"));
+            Assert.That(httpClient.RequestBody, Does.Contain("https://synoai.local/Image/Entree/capture.jpeg?token=image-token"));
         }
 
         [Test]
@@ -192,9 +186,8 @@ namespace SynoAI.Tests
                 {
                     Content = new StringContent(@"{""ok"":true}")
                 });
-            Shared.HttpClient = httpClient;
 
-            Telegram telegram = new()
+            Telegram telegram = new(httpClient)
             {
                 ChatID = "1",
                 Token = "token"
@@ -213,15 +206,42 @@ namespace SynoAI.Tests
         }
 
         [Test]
+        public void SendAsync_ThrowsWhenPhotoCannotBeSent()
+        {
+            string imagePath = Path.Combine(_workspace, "capture.jpeg");
+            File.WriteAllBytes(imagePath, new byte[] { 1, 2, 3 });
+
+            FakeHttpClient httpClient = new(
+                new HttpResponseMessage(HttpStatusCode.BadRequest)
+                {
+                    Content = new StringContent(@"{""ok"":false,""description"":""bad request""}")
+                });
+
+            Telegram telegram = new(httpClient)
+            {
+                ChatID = "1",
+                Token = "token"
+            };
+
+            Assert.That(async () => await telegram.SendAsync(
+                new Camera { Name = "Entree" },
+                new Notification
+                {
+                    ProcessedImage = new ProcessedImage(imagePath),
+                    ValidPredictions = new[] { new AIPrediction { Label = "person", Confidence = 90 } }
+                },
+                NullLogger.Instance), Throws.InstanceOf<HttpRequestException>());
+        }
+
+        [Test]
         public async Task SendRecordingClipAsync_PostsVideoToTelegram()
         {
             string clipPath = Path.Combine(_workspace, "clip.mp4");
             File.WriteAllBytes(clipPath, new byte[] { 1, 2, 3, 4 });
 
             FakeHttpClient httpClient = new();
-            Shared.HttpClient = httpClient;
 
-            Telegram telegram = new()
+            Telegram telegram = new(httpClient)
             {
                 ChatID = "1",
                 Token = "token",
@@ -301,12 +321,13 @@ namespace SynoAI.Tests
             Assert.That(telegram.RecordingClipDurationMs, Is.EqualTo(120000));
         }
 
-        private static void Configure(string accessToken = null, int? httpRetryCount = null, int? httpRetryDelayMs = null)
+        private static void Configure(string accessToken = null, string imageAccessToken = null, int? httpRetryCount = null, int? httpRetryDelayMs = null)
         {
             Dictionary<string, string> values = new()
             {
                 ["AI:Url"] = "http://codeproject-ai:32168",
-                ["AccessToken"] = accessToken
+                ["AccessToken"] = accessToken,
+                ["ImageAccessToken"] = imageAccessToken
             };
 
             if (httpRetryCount.HasValue)

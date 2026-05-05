@@ -13,21 +13,26 @@ using System.Threading.Tasks;
 
 namespace SynoAI.Services
 {
+    public sealed class SynologyCookieStore
+    {
+        public CookieContainer CookieContainer { get; } = new();
+    }
+
     public class SynologyService : ISynologyService
     {
+        public const string HttpClientName = "synology";
+
         /// <summary>
         /// The current cookie with valid authentication.
         /// </summary>
-        private static Cookie Cookie { get; set; }
-        private static readonly CookieContainer _cookieContainer = new CookieContainer();
-        private static readonly SemaphoreSlim _loginSemaphore = new(1, 1);
-        private static readonly object _httpClientLock = new();
-        private static HttpClient _httpClient;
+        private Cookie Cookie { get; set; }
+        private readonly SemaphoreSlim _loginSemaphore = new(1, 1);
+        private readonly CookieContainer _cookieContainer;
 
         /// <summary>
         /// A list of all cameras mapped from the config friendly name to the Synology Camera ID.
         /// </summary>
-        protected static Dictionary<string, int> Cameras { get; private set; }
+        protected Dictionary<string, int> Cameras { get; private set; }
 
         private const string API_LOGIN = "SYNO.API.Auth";
         private const string API_CAMERA = "SYNO.SurveillanceStation.Camera";
@@ -46,23 +51,30 @@ namespace SynoAI.Services
         /// <summary>
         /// Holds the entry point to the SYNO.API.Auth API entry point.
         /// </summary>
-        private static string _loginPath { get; set; }
+        private string _loginPath { get; set; }
         /// <summary>
         /// Holds the entry point to the SYNO.SurveillanceStation.Camera API entry point.
         /// </summary>
-        private static string _cameraPath { get; set; }
+        private string _cameraPath { get; set; }
         /// <summary>
         /// Holds the entry point to the SYNO.SurveillanceStation.Recording API entry point.
         /// </summary>
-        private static string _recordingPath { get; set; }
+        private string _recordingPath { get; set; }
 
-        private IHostApplicationLifetime _applicationLifetime;
-        private ILogger<SynologyService> _logger;
+        private readonly IHostApplicationLifetime _applicationLifetime;
+        private readonly ILogger<SynologyService> _logger;
+        private readonly IHttpClientFactory _httpClientFactory;
 
-        public SynologyService(IHostApplicationLifetime applicationLifetime, ILogger<SynologyService> logger)
+        public SynologyService(
+            IHostApplicationLifetime applicationLifetime,
+            ILogger<SynologyService> logger,
+            IHttpClientFactory httpClientFactory,
+            SynologyCookieStore cookieStore)
         {
             _applicationLifetime = applicationLifetime;
             _logger = logger;
+            _httpClientFactory = httpClientFactory;
+            _cookieContainer = cookieStore.CookieContainer;
         }
 
         /// <summary>
@@ -964,34 +976,10 @@ namespace SynoAI.Services
         /// <returns>An HttpClient.</returns>
         private HttpClient GetHttpClient()
         {
-            if (_httpClient != null)
-            {
-                return _httpClient;
-            }
-
-            lock (_httpClientLock)
-            {
-                if (_httpClient == null)
-                {
-                    HttpClientHandler httpClientHandler = new HttpClientHandler
-                    {
-                        CookieContainer = _cookieContainer
-                    };
-
-                    if (Config.AllowInsecureUrl)
-                    {
-                        httpClientHandler.ServerCertificateCustomValidationCallback = (message, cert, chain, sslPolicyErrors) => true;
-                    }
-
-                    _httpClient = new HttpClient(httpClientHandler)
-                    {
-                        BaseAddress = new Uri(Config.Url),
-                        Timeout = TimeSpan.FromSeconds(Config.SynologyTimeoutSeconds)
-                    };
-                }
-            }
-
-            return _httpClient;
+            HttpClient client = _httpClientFactory.CreateClient(HttpClientName);
+            client.BaseAddress = new Uri(Config.Url);
+            client.Timeout = TimeSpan.FromSeconds(Config.SynologyTimeoutSeconds);
+            return client;
         }
     }
 }

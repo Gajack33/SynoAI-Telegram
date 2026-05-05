@@ -84,7 +84,9 @@ Telegram is the only notifier supported by this fork. Keep `PhotoBaseURL` empty
 for the normal NAS setup; SynoAI-Telegram will upload the processed image
 directly to Telegram. Only set `PhotoBaseURL` if SynoAI-Telegram is exposed
 through a public URL that Telegram can fetch, because Telegram must be able to
-reach `/Image/...` from the internet.
+reach `/Image/...` from the internet. When `PhotoBaseURL` is set, configure an
+`ImageAccessToken` that is different from the Surveillance Station
+`AccessToken`.
 
 Set `SendRecordingClip` to `true` only after photo notifications are working.
 `RecordingClipOffsetMs` is applied relative to the snapshot where SynoAI detected
@@ -242,7 +244,7 @@ enabled, SynoAI-Telegram sends a recording clip afterward.
   Surveillance Station to finish writing the relevant segment.
 - Debug exclusion zones: temporarily enable `DrawExclusions`.
 - Keep `PhotoBaseURL` empty for Telegram; SynoAI-Telegram uploads the photo
-  directly.
+  directly. If you expose `/Image/...`, use a separate `ImageAccessToken`.
 
 ## 8. Telegram Translations
 

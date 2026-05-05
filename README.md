@@ -131,6 +131,8 @@ Important settings are configured in `appsettings.json`:
 - `User` / `Password`: account allowed to read Surveillance Station cameras and
   recordings.
 - `AccessToken`: shared token required by incoming SynoAI-Telegram endpoints.
+- `ImageAccessToken`: separate shared token for `/Image/...` capture URLs when
+  `PhotoBaseURL` is configured. It must be different from `AccessToken`.
 - `AI:Type`: `CodeProjectAIServer` or `DeepStack`.
 - `AI:Url`: detector base URL from inside the SynoAI-Telegram container.
 - `AI:Path`: detector route, such as `v1/vision/custom/ipcam-general` for
@@ -193,7 +195,8 @@ SynoAI-Telegram downloads it.
 the processed image directly to Telegram, which works on a private LAN. If you
 set `PhotoBaseURL`, Telegram receives a URL such as
 `https://example.com/Image/CAMERA/CAPTURE.jpg?token=...`; that URL must be
-reachable by Telegram's servers.
+reachable by Telegram's servers. Configure a separate `ImageAccessToken` for
+those public image URLs.
 
 Telegram translations live in
 `SynoAI/Notifiers/Telegram/telegram-translations.json`. Add a new top-level
@@ -212,8 +215,9 @@ Use a dedicated Synology account with only the Surveillance Station permissions
 needed to read cameras and recordings.
 
 Set a long random `AccessToken` and include it in every Surveillance Station
-webhook URL. Keep `PhotoBaseURL` empty unless SynoAI-Telegram is exposed through
-a public URL that Telegram can reach.
+webhook URL. If `PhotoBaseURL` is enabled, set a different long random
+`ImageAccessToken` for public image URLs. Keep `PhotoBaseURL` empty unless
+SynoAI-Telegram is exposed through a public URL that Telegram can reach.
 
 Configuration templates are provided as `appsettings.example.json`. Copy one to
 `appsettings.json` for your own deployment and keep that file private because it

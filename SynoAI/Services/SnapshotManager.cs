@@ -41,6 +41,15 @@ namespace SynoAI.Services
                 return null;
             }
 
+            bool hadValidPredictions = validPredictionList.Count > 0;
+            predictionList = NormalizePredictions(camera, image.Width, image.Height, predictionList, logger);
+            validPredictionList = NormalizePredictions(camera, image.Width, image.Height, validPredictionList, logger);
+            if (hadValidPredictions && validPredictionList.Count == 0)
+            {
+                logger.LogWarning($"{camera.Name}: Valid detections were returned, but none had usable image coordinates.");
+                return null;
+            }
+
             // Draw the exclusion zones if enabled
             if (Config.DrawExclusions && camera.Exclusions != null)
             {
@@ -293,6 +302,55 @@ namespace SynoAI.Services
         internal static bool IsSnapshotSizeAllowed(byte[] snapshot)
         {
             return snapshot != null && (Config.MaxSnapshotBytes <= 0 || snapshot.Length <= Config.MaxSnapshotBytes);
+        }
+
+        internal static List<AIPrediction> NormalizePredictions(
+            Camera camera,
+            int imageWidth,
+            int imageHeight,
+            IEnumerable<AIPrediction> predictions,
+            ILogger logger)
+        {
+            List<AIPrediction> normalizedPredictions = new();
+            if (imageWidth <= 0 || imageHeight <= 0)
+            {
+                logger.LogWarning($"{camera.Name}: Cannot normalize predictions because image dimensions are invalid.");
+                return normalizedPredictions;
+            }
+
+            foreach (AIPrediction prediction in predictions ?? Enumerable.Empty<AIPrediction>())
+            {
+                if (prediction == null ||
+                    prediction.MaxX <= prediction.MinX ||
+                    prediction.MaxY <= prediction.MinY)
+                {
+                    logger.LogWarning($"{camera.Name}: Ignoring prediction with invalid coordinates.");
+                    continue;
+                }
+
+                int minX = Math.Clamp(prediction.MinX, 0, imageWidth);
+                int minY = Math.Clamp(prediction.MinY, 0, imageHeight);
+                int maxX = Math.Clamp(prediction.MaxX, 0, imageWidth);
+                int maxY = Math.Clamp(prediction.MaxY, 0, imageHeight);
+
+                if (maxX <= minX || maxY <= minY)
+                {
+                    logger.LogWarning($"{camera.Name}: Ignoring prediction outside image bounds.");
+                    continue;
+                }
+
+                normalizedPredictions.Add(new AIPrediction
+                {
+                    Label = prediction.Label,
+                    Confidence = prediction.Confidence,
+                    MinX = minX,
+                    MinY = minY,
+                    MaxX = maxX,
+                    MaxY = maxY
+                });
+            }
+
+            return normalizedPredictions;
         }
 
 

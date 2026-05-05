@@ -14,10 +14,12 @@ namespace SynoAI.Services
     public class AIService : IAIService
     {
         private readonly ILogger<AIService> _logger;
+        private readonly SynoAI.App.IHttpClient _httpClient;
 
-        public AIService(ILogger<AIService> logger)
+        public AIService(ILogger<AIService> logger, SynoAI.App.IHttpClient httpClient)
         {
             _logger = logger;
+            _httpClient = httpClient;
         }
 
         public async Task<IEnumerable<AIPrediction>> ProcessAsync(Camera camera, byte[] image)
@@ -92,7 +94,7 @@ namespace SynoAI.Services
             {
                 case AIType.DeepStack:
                 case AIType.CodeProjectAIServer: // Compatible multipart detection API.
-                    return new DeepStackAI();
+                    return new DeepStackAI(_httpClient);
                 default:
                     throw new NotImplementedException(Config.AI.ToString());
             }

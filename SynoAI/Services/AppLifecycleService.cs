@@ -16,12 +16,18 @@ namespace SynoAI.Services
         private readonly IServiceScopeFactory _scopeFactory;
         private readonly ILogger<AppLifecycleService> _logger;
         private readonly IConfiguration _configuration;
+        private readonly IHttpClient _httpClient;
 
-        public AppLifecycleService(IServiceScopeFactory scopeFactory, ILogger<AppLifecycleService> logger, IConfiguration configuration)
+        public AppLifecycleService(
+            IServiceScopeFactory scopeFactory,
+            ILogger<AppLifecycleService> logger,
+            IConfiguration configuration,
+            IHttpClient httpClient)
         {
             _scopeFactory = scopeFactory;
             _logger = logger;
             _configuration = configuration;
+            _httpClient = httpClient;
         }
 
         public async Task StartAsync(CancellationToken cancellationToken)
@@ -32,7 +38,7 @@ namespace SynoAI.Services
                 ?? "unknown";
             _logger.LogInformation("Starting SynoAI version {version}.", version);
 
-            Config.Generate(_logger, _configuration);
+            Config.Generate(_logger, _configuration, _httpClient);
             IReadOnlyList<string> configurationErrors = Config.ValidateStartupConfiguration();
             if (configurationErrors.Count > 0)
             {
@@ -51,7 +57,7 @@ namespace SynoAI.Services
             }
 
             int sharedTimeoutSeconds = Math.Max(Config.HttpTimeoutSeconds, Math.Max(Config.AITimeoutSeconds, Config.TelegramTimeoutSeconds));
-            Shared.HttpClient.Timeout = TimeSpan.FromSeconds(sharedTimeoutSeconds);
+            _httpClient.Timeout = TimeSpan.FromSeconds(sharedTimeoutSeconds);
 
             using (var scope = _scopeFactory.CreateScope())
             {

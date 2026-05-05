@@ -2,6 +2,7 @@
 using Microsoft.Extensions.Logging;
 using SkiaSharp;
 using SynoAI.AIs;
+using SynoAI.App;
 using SynoAI.Models;
 using SynoAI.Notifiers;
 using SynoAI.Notifiers.Telegram;
@@ -228,6 +229,10 @@ namespace SynoAI
         /// </summary>
         public static string AccessToken { get; private set; }
         /// <summary>
+        /// Shared token used to authorize public capture image requests.
+        /// </summary>
+        public static string ImageAccessToken { get; private set; }
+        /// <summary>
         /// Timeout in seconds for outbound HTTP calls.
         /// </summary>
         public static int HttpTimeoutSeconds { get; private set; }
@@ -274,7 +279,7 @@ namespace SynoAI
         /// Generates the configuration from the provided IConfiguration.
         /// </summary>
         /// <param name="configuration">The configuration from which to pull the values.</param>
-        public static void Generate(ILogger logger, IConfiguration configuration)
+        public static void Generate(ILogger logger, IConfiguration configuration, IHttpClient httpClient = null)
         {
             logger.LogInformation("Processing config.");
 
@@ -284,6 +289,7 @@ namespace SynoAI
             Password = configuration.GetValue<string>("Password");
             AllowInsecureUrl = configuration.GetValue<bool>("AllowInsecureUrl", false);
             AccessToken = configuration.GetValue<string>("AccessToken");
+            ImageAccessToken = configuration.GetValue<string>("ImageAccessToken");
             HttpTimeoutSeconds = configuration.GetValue<int>("HttpTimeoutSeconds", 30);
             HttpRetryCount = Math.Clamp(configuration.GetValue<int>("HttpRetryCount", 2), 0, 5);
             HttpRetryDelayMs = Math.Clamp(configuration.GetValue<int>("HttpRetryDelayMs", 1000), 0, 30000);
@@ -356,7 +362,7 @@ namespace SynoAI
             AIWarmupDelayMs = Math.Max(0, aiSection.GetValue<int>("WarmupDelayMs", 5000));
 
             Cameras = GenerateCameras(logger, configuration);
-            Notifiers = GenerateNotifiers(logger, configuration);
+            Notifiers = GenerateNotifiers(logger, configuration, httpClient ?? new HttpClientWrapper());
         }
 
         public static IReadOnlyList<string> ValidateStartupConfiguration()
@@ -502,6 +508,23 @@ namespace SynoAI
                             errors.Add("Telegram Token is required.");
                         }
 
+                        if (!string.IsNullOrWhiteSpace(telegram.PhotoBaseURL))
+                        {
+                            if (!IsValidAbsoluteHttpsUri(telegram.PhotoBaseURL))
+                            {
+                                errors.Add("Telegram PhotoBaseURL must be an absolute https URL when configured.");
+                            }
+
+                            if (string.IsNullOrWhiteSpace(ImageAccessToken))
+                            {
+                                errors.Add("ImageAccessToken is required when Telegram PhotoBaseURL is configured.");
+                            }
+                            else if (string.Equals(ImageAccessToken, AccessToken, StringComparison.Ordinal))
+                            {
+                                errors.Add("ImageAccessToken must be different from AccessToken when Telegram PhotoBaseURL is configured.");
+                            }
+                        }
+
                         if (telegram.SendRecordingClip && telegram.RecordingClipDurationMs <= 0)
                         {
                             errors.Add("Telegram RecordingClipDurationMs must be greater than zero when SendRecordingClip is enabled.");
@@ -533,6 +556,12 @@ namespace SynoAI
                    (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
         }
 
+        private static bool IsValidAbsoluteHttpsUri(string value)
+        {
+            return Uri.TryCreate(value, UriKind.Absolute, out Uri uri) &&
+                   uri.Scheme == Uri.UriSchemeHttps;
+        }
+
         private static bool IsValidRelativeHttpPath(string value)
         {
             if (string.IsNullOrWhiteSpace(value) ||
@@ -558,7 +587,7 @@ namespace SynoAI
             return section.Get<List<Camera>>();
         }
 
-        private static IEnumerable<INotifier> GenerateNotifiers(ILogger logger, IConfiguration configuration)
+        private static IEnumerable<INotifier> GenerateNotifiers(ILogger logger, IConfiguration configuration, IHttpClient httpClient)
         {
             logger.LogInformation("Processing notifier config.");
 
@@ -575,7 +604,7 @@ namespace SynoAI
                     throw new NotImplementedException(type);
                 }
 
-                notifiers.Add(NotifierFactory.Create(notifier, logger, child));
+                notifiers.Add(NotifierFactory.Create(notifier, logger, child, httpClient));
             }
 
             return notifiers;
