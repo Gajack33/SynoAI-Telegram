@@ -27,6 +27,14 @@ namespace SynoAI.Tests
         }
 
         [Test]
+        public void BuildRecentRecordingListResource_QueriesLatestRecordingsWithoutTimeFilter()
+        {
+            string resource = SynologyService.BuildRecentRecordingListResource("entry.cgi", 42);
+
+            Assert.That(resource, Is.EqualTo("webapi/entry.cgi?api=SYNO.SurveillanceStation.Recording&method=List&version=6&cameraIds=42&offset=0&limit=20"));
+        }
+
+        [Test]
         public void SelectRecordingForDetection_PrefersRecordingContainingDetection()
         {
             DateTimeOffset detectedAt = DateTimeOffset.FromUnixTimeSeconds(1_714_821_600);
@@ -38,6 +46,64 @@ namespace SynoAI.Tests
             }, detectedAt);
 
             Assert.That(selected.Id, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void ShouldRetryWithRecentRecordingList_WhenFilteredLookupIsEmpty()
+        {
+            DateTimeOffset detectedAt = DateTimeOffset.FromUnixTimeSeconds(1_714_821_600);
+
+            bool retry = SynologyService.ShouldRetryWithRecentRecordingList(Array.Empty<SynologyRecording>(), null, detectedAt);
+
+            Assert.That(retry, Is.True);
+        }
+
+        [Test]
+        public void ShouldRetryWithRecentRecordingList_WhenSelectedRecordingStartsAfterDetection()
+        {
+            DateTimeOffset detectedAt = DateTimeOffset.FromUnixTimeSeconds(1_714_821_600);
+            SynologyRecording selected = new()
+            {
+                Id = 1,
+                StartTimeUnixSeconds = 1_714_821_900,
+                EndTimeUnixSeconds = 1_714_822_200
+            };
+
+            bool retry = SynologyService.ShouldRetryWithRecentRecordingList(new[] { selected }, selected, detectedAt);
+
+            Assert.That(retry, Is.True);
+        }
+
+        [Test]
+        public void ShouldRetryWithRecentRecordingList_WhenSelectedRecordingEndedBeforeDetection()
+        {
+            DateTimeOffset detectedAt = DateTimeOffset.FromUnixTimeSeconds(1_714_821_600);
+            SynologyRecording selected = new()
+            {
+                Id = 1,
+                StartTimeUnixSeconds = 1_714_821_000,
+                EndTimeUnixSeconds = 1_714_821_300
+            };
+
+            bool retry = SynologyService.ShouldRetryWithRecentRecordingList(new[] { selected }, selected, detectedAt);
+
+            Assert.That(retry, Is.True);
+        }
+
+        [Test]
+        public void ShouldRetryWithRecentRecordingList_DoesNotRetryWhenSelectionContainsDetection()
+        {
+            DateTimeOffset detectedAt = DateTimeOffset.FromUnixTimeSeconds(1_714_821_600);
+            SynologyRecording selected = new()
+            {
+                Id = 1,
+                StartTimeUnixSeconds = 1_714_821_500,
+                EndTimeUnixSeconds = 1_714_821_800
+            };
+
+            bool retry = SynologyService.ShouldRetryWithRecentRecordingList(new[] { selected }, selected, detectedAt);
+
+            Assert.That(retry, Is.False);
         }
 
         [Test]

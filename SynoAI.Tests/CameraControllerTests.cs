@@ -103,6 +103,47 @@ namespace SynoAI.Tests
         }
 
         [Test]
+        public async Task Processor_SendsTelegramVideoWhenRecordingClipDownloaded()
+        {
+            Configure();
+
+            string clipPath = Path.Combine(_workspace, "clip.mp4");
+            File.WriteAllBytes(clipPath, new byte[] { 1, 2, 3, 4 });
+
+            FakeHttpClient httpClient = new();
+            Shared.HttpClient = httpClient;
+
+            FakeSynologyService synologyService = new(CreateJpeg(640, 360))
+            {
+                ClipFilePath = clipPath
+            };
+
+            CameraTriggerProcessor processor = new(
+                new FakeAIService(new[]
+                {
+                    new AIPrediction
+                    {
+                        Label = "person",
+                        Confidence = 90,
+                        MinX = 10,
+                        MinY = 20,
+                        MaxX = 80,
+                        MaxY = 160
+                    }
+                }),
+                synologyService,
+                new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)),
+                new DetectionMemory(),
+                NullLogger<CameraTriggerProcessor>.Instance);
+
+            CameraProcessingStatus status = await processor.ProcessAsync("Entree", CancellationToken.None);
+
+            Assert.That(status, Is.EqualTo(CameraProcessingStatus.ValidObjectDetected));
+            Assert.That(synologyService.ClipDownloadCalls, Is.EqualTo(1));
+            Assert.That(httpClient.Requests.Select(x => x.AbsolutePath), Is.EqualTo(new[] { "/bottoken/sendPhoto", "/bottoken/sendVideo" }));
+        }
+
+        [Test]
         public async Task Processor_PerfectShot_SelectsHighestConfidenceSnapshot()
         {
             Configure(new Dictionary<string, string>
@@ -306,6 +347,7 @@ namespace SynoAI.Tests
             }
 
             public bool ThrowOnClipDownload { get; set; }
+            public string ClipFilePath { get; set; }
             public int ClipDownloadCalls { get; private set; }
             public int SnapshotCalls { get; private set; }
 
@@ -337,6 +379,11 @@ namespace SynoAI.Tests
                 if (ThrowOnClipDownload)
                 {
                     throw new InvalidOperationException("clip unavailable");
+                }
+
+                if (!string.IsNullOrWhiteSpace(ClipFilePath))
+                {
+                    return Task.FromResult(new ProcessedFile(ClipFilePath));
                 }
 
                 return Task.FromResult<ProcessedFile>(null);

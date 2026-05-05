@@ -38,6 +38,7 @@ namespace SynoAI.Services
         private const string URI_CAMERA_INFO = "webapi/{0}?api=SYNO.SurveillanceStation.Camera&method=List&version={1}";
         private const string URI_CAMERA_SNAPSHOT = "webapi/{0}?version={1}&id={2}&api=SYNO.SurveillanceStation.Camera&method=GetSnapshot&profileType={3}";
         private const string URI_RECORDING_LIST = "webapi/{0}?api=SYNO.SurveillanceStation.Recording&method=List&version=6&cameraIds={1}&offset=0&limit={2}&fromTime={3}&toTime=0";
+        private const string URI_RECORDING_LIST_RECENT = "webapi/{0}?api=SYNO.SurveillanceStation.Recording&method=List&version=6&cameraIds={1}&offset=0&limit={2}";
         private const string URI_RECORDING_DOWNLOAD = "webapi/{0}/{1}?api=SYNO.SurveillanceStation.Recording&method=Download&version=6&id={2}&offsetTimeMs={3}&playTimeMs={4}";
         private const int RecordingListLimit = 20;
         private const int RecordingLookupBeforeSeconds = 15 * 60;
@@ -323,26 +324,30 @@ namespace SynoAI.Services
                 return null;
             }
 
-            string listResource = BuildRecordingListResource(_recordingPath, id, detectedAt);
-            using HttpResponseMessage listResponse = await SendWithTransientRetriesAsync(
-                () => client.GetAsync(listResource),
-                "list recordings",
-                cameraName);
-            if (!listResponse.IsSuccessStatusCode)
-            {
-                _logger.LogError($"{cameraName}: Failed to list recordings with HTTP status code '{listResponse.StatusCode}'");
-                return null;
-            }
-
-            SynologyResponse<SynologyRecordings> recordingsResponse = await GetResponse<SynologyRecordings>(listResponse);
-            if (!recordingsResponse.Success)
-            {
-                _logger.LogError($"{cameraName}: Failed to list recordings with error code '{recordingsResponse.Error.Code}'");
-                return null;
-            }
-
-            List<SynologyRecording> recordings = recordingsResponse.Data?.Recordings?.ToList() ?? new List<SynologyRecording>();
+            List<SynologyRecording> recordings = await TryListRecordingsAsync(
+                client,
+                BuildRecordingListResource(_recordingPath, id, detectedAt),
+                cameraName,
+                "time-filtered");
             SynologyRecording recording = SelectRecordingForDetection(recordings, detectedAt);
+            if (ShouldRetryWithRecentRecordingList(recordings, recording, detectedAt))
+            {
+                _logger.LogInformation(
+                    "{cameraName}: Time-filtered recording lookup did not find a usable clip candidate. Retrying with the latest recordings.",
+                    cameraName);
+
+                List<SynologyRecording> recentRecordings = await TryListRecordingsAsync(
+                    client,
+                    BuildRecentRecordingListResource(_recordingPath, id),
+                    cameraName,
+                    "latest");
+                SynologyRecording recentRecording = SelectRecordingForDetection(recentRecordings, detectedAt);
+                if (recentRecording != null)
+                {
+                    recording = recentRecording;
+                }
+            }
+
             if (recording == null)
             {
                 _logger.LogInformation($"{cameraName}: No recent recordings found.");
@@ -430,6 +435,38 @@ namespace SynoAI.Services
             return string.Format(URI_RECORDING_LIST, recordingPath, cameraId, RecordingListLimit, fromTime);
         }
 
+        internal static string BuildRecentRecordingListResource(string recordingPath, int cameraId)
+        {
+            return string.Format(URI_RECORDING_LIST_RECENT, recordingPath, cameraId, RecordingListLimit);
+        }
+
+        internal static bool ShouldRetryWithRecentRecordingList(
+            IEnumerable<SynologyRecording> recordings,
+            SynologyRecording selectedRecording,
+            DateTimeOffset detectedAt)
+        {
+            List<SynologyRecording> recordingList = recordings?.ToList() ?? new List<SynologyRecording>();
+            if (recordingList.Count == 0 || selectedRecording == null)
+            {
+                return true;
+            }
+
+            DateTimeOffset? selectedStart = GetRecordingStartTime(selectedRecording);
+            DateTimeOffset? selectedEnd = GetRecordingEndTime(selectedRecording);
+            if (selectedStart.HasValue && selectedEnd.HasValue &&
+                selectedStart.Value <= detectedAt && detectedAt <= selectedEnd.Value)
+            {
+                return false;
+            }
+
+            if (selectedStart.HasValue && selectedStart.Value > detectedAt)
+            {
+                return true;
+            }
+
+            return selectedEnd.HasValue && selectedEnd.Value < detectedAt;
+        }
+
         internal static SynologyRecording SelectRecordingForDetection(IEnumerable<SynologyRecording> recordings, DateTimeOffset detectedAt)
         {
             List<SynologyRecording> recordingList = recordings?.ToList() ?? new List<SynologyRecording>();
@@ -515,6 +552,40 @@ namespace SynoAI.Services
             return endTimeUnixSeconds.HasValue && endTimeUnixSeconds.Value > 0
                 ? DateTimeOffset.FromUnixTimeSeconds(endTimeUnixSeconds.Value)
                 : null;
+        }
+
+        private async Task<List<SynologyRecording>> TryListRecordingsAsync(
+            HttpClient client,
+            string listResource,
+            string cameraName,
+            string lookupDescription)
+        {
+            using HttpResponseMessage listResponse = await SendWithTransientRetriesAsync(
+                () => client.GetAsync(listResource),
+                $"list {lookupDescription} recordings",
+                cameraName);
+            if (!listResponse.IsSuccessStatusCode)
+            {
+                _logger.LogWarning(
+                    "{cameraName}: Failed to list {lookupDescription} recordings with HTTP status code '{statusCode}'",
+                    cameraName,
+                    lookupDescription,
+                    listResponse.StatusCode);
+                return null;
+            }
+
+            SynologyResponse<SynologyRecordings> recordingsResponse = await GetResponse<SynologyRecordings>(listResponse);
+            if (!recordingsResponse.Success)
+            {
+                _logger.LogWarning(
+                    "{cameraName}: Failed to list {lookupDescription} recordings with error code '{errorCode}'",
+                    cameraName,
+                    lookupDescription,
+                    recordingsResponse.Error?.Code);
+                return null;
+            }
+
+            return recordingsResponse.Data?.Recordings?.ToList() ?? new List<SynologyRecording>();
         }
 
         private async Task<byte[]> TakeSnapshotAsync(string cameraName, bool retryAfterLogin)

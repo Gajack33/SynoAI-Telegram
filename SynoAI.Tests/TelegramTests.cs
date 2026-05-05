@@ -213,6 +213,32 @@ namespace SynoAI.Tests
         }
 
         [Test]
+        public async Task SendRecordingClipAsync_PostsVideoToTelegram()
+        {
+            string clipPath = Path.Combine(_workspace, "clip.mp4");
+            File.WriteAllBytes(clipPath, new byte[] { 1, 2, 3, 4 });
+
+            FakeHttpClient httpClient = new();
+            Shared.HttpClient = httpClient;
+
+            Telegram telegram = new()
+            {
+                ChatID = "1",
+                Token = "token",
+                SendRecordingClip = true
+            };
+
+            await telegram.SendRecordingClipAsync(
+                new Camera { Name = "Entree" },
+                new Notification { RecordingClip = new ProcessedFile(clipPath) },
+                NullLogger.Instance);
+
+            Assert.That(httpClient.RequestUri.AbsolutePath, Is.EqualTo("/bottoken/sendVideo"));
+            Assert.That(httpClient.RequestBody, Does.Contain("clip.mp4"));
+            Assert.That(httpClient.RequestBody, Does.Contain("video"));
+        }
+
+        [Test]
         public void Factory_DefaultsRecordingClipDurationToSixtySeconds()
         {
             Telegram telegram = CreateTelegramFromFactory(new Dictionary<string, string>
@@ -319,6 +345,7 @@ namespace SynoAI.Tests
             }
 
             public TimeSpan Timeout { get; set; }
+            public Uri RequestUri { get; private set; }
             public string RequestBody { get; private set; }
             public int RequestCount { get; private set; }
 
@@ -335,6 +362,7 @@ namespace SynoAI.Tests
             public async Task<HttpResponseMessage> PostAsync(Uri requestUri, HttpContent content, CancellationToken cancellationToken)
             {
                 RequestCount++;
+                RequestUri = requestUri;
                 RequestBody = await content.ReadAsStringAsync();
 
                 return _responses.Count > 0
