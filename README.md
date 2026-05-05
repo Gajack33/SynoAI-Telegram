@@ -60,16 +60,19 @@ NAS deployment small and focused.
 The Synology deployment files live in [`deploy/synology`](deploy/synology).
 
 1. Copy [`deploy/synology/appsettings.example.json`](deploy/synology/appsettings.example.json)
-   to `/volume1/docker/synoai-telegram/appsettings.json` on the NAS.
-2. Edit the copied file with your NAS URL, Surveillance Station credentials,
+   to `/volume1/docker/synoai/appsettings.json` on the NAS.
+2. Copy [`deploy/synology/docker-compose.yml`](deploy/synology/docker-compose.yml)
+   to the NAS, for example under `/volume1/docker/synoai/deploy/synology`.
+3. Edit the copied appsettings file with your NAS URL, Surveillance Station credentials,
    access token, camera names, AI URL, and Telegram settings.
-3. From `deploy/synology`, run:
+4. From the directory containing `docker-compose.yml`, run:
 
 ```sh
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
-4. Create a Surveillance Station action rule that calls:
+5. Create a Surveillance Station action rule that calls:
 
 ```text
 http://NAS_IP:8080/Camera/CAMERA_NAME?token=ACCESS_TOKEN
@@ -106,6 +109,18 @@ Validate the Synology compose file:
 ```powershell
 docker compose -f .\deploy\synology\docker-compose.yml config
 ```
+
+Publish the Docker image manually to GitHub Container Registry:
+
+```powershell
+docker login ghcr.io
+docker build -t ghcr.io/gajack33/synoai-telegram:latest .\SynoAI
+docker push ghcr.io/gajack33/synoai-telegram:latest
+```
+
+The `Docker` GitHub Actions workflow also publishes
+`ghcr.io/gajack33/synoai-telegram:latest` automatically after a successful push
+to `main`.
 
 ## Configuration Notes
 

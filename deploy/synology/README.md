@@ -13,22 +13,41 @@ reproduce without committing local secrets.
 Connect to the NAS over SSH and create the persistent directories:
 
 ```sh
-mkdir -p /volume1/docker/synoai-telegram/captures
+mkdir -p /volume1/docker/synoai/deploy/synology
+mkdir -p /volume1/docker/synoai/captures
 mkdir -p /volume1/docker/codeproject/data
 mkdir -p /volume1/docker/codeproject/modules
 ```
 
-Clone or copy the full repository to the NAS. Keep the repository layout intact
-because `docker-compose.yml` builds the application from `../../SynoAI`
-relative to this directory.
+Copy `docker-compose.yml` from this directory to the NAS, for example:
+
+```text
+/volume1/docker/synoai/deploy/synology/docker-compose.yml
+```
+
+The compose file pulls the SynoAI-Telegram image from GitHub Container Registry,
+so the full repository does not need to be copied to the NAS.
 
 Copy `appsettings.example.json` to:
 
 ```text
-/volume1/docker/synoai-telegram/appsettings.json
+/volume1/docker/synoai/appsettings.json
 ```
 
-Then edit `/volume1/docker/synoai-telegram/appsettings.json` on the NAS.
+Then edit `/volume1/docker/synoai/appsettings.json` on the NAS.
+
+The image used by default is:
+
+```text
+ghcr.io/gajack33/synoai-telegram:latest
+```
+
+If the GitHub package is private, log in once from the NAS with a GitHub
+personal access token that has `read:packages`:
+
+```sh
+echo "GITHUB_TOKEN_WITH_READ_PACKAGES" | docker login ghcr.io -u gajack33 --password-stdin
+```
 
 ## 2. Configure SynoAI-Telegram
 
@@ -129,16 +148,19 @@ If the custom IP camera model does not work well for your scene, try
 
 ## 4. Start The Containers
 
-From the repository's `deploy/synology` directory:
+From the directory containing the copied `docker-compose.yml`, for example
+`/volume1/docker/synoai/deploy/synology`:
 
 ```sh
-docker compose up -d --build
+docker compose pull
+docker compose up -d
 ```
 
 If your NAS still uses the legacy Compose binary:
 
 ```sh
-docker-compose up -d --build
+docker-compose pull
+docker-compose up -d
 ```
 
 Exposed port:
@@ -147,6 +169,13 @@ Exposed port:
 
 CodeProject.AI is not published to the NAS network by default. SynoAI-Telegram
 reaches it over the Docker network at `http://codeproject-ai:32168`.
+
+To update SynoAI-Telegram after a new image has been published:
+
+```sh
+docker compose pull synoai-telegram
+docker compose up -d synoai-telegram
+```
 
 ## 5. Create The Surveillance Station Action Rule
 
