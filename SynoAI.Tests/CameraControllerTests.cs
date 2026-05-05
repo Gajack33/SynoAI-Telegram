@@ -21,14 +21,12 @@ namespace SynoAI.Tests
 {
     public class CameraControllerTests
     {
-        private IHttpClient _previousHttpClient;
         private string _previousCurrentDirectory;
         private string _workspace;
 
         [SetUp]
         public void Setup()
         {
-            _previousHttpClient = Shared.HttpClient;
             _previousCurrentDirectory = Environment.CurrentDirectory;
             _workspace = Path.Combine(Path.GetTempPath(), Guid.NewGuid().ToString("N"));
             Directory.CreateDirectory(_workspace);
@@ -38,7 +36,6 @@ namespace SynoAI.Tests
         [TearDown]
         public void TearDown()
         {
-            Shared.HttpClient = _previousHttpClient;
             Environment.CurrentDirectory = _previousCurrentDirectory;
 
             if (Directory.Exists(_workspace))
@@ -67,10 +64,8 @@ namespace SynoAI.Tests
         [Test]
         public async Task Processor_SendsTelegramPhotoEvenWhenRecordingClipDownloadFails()
         {
-            Configure();
-
             FakeHttpClient httpClient = new();
-            Shared.HttpClient = httpClient;
+            Configure(httpClient: httpClient);
 
             FakeSynologyService synologyService = new(CreateJpeg(640, 360))
             {
@@ -105,13 +100,11 @@ namespace SynoAI.Tests
         [Test]
         public async Task Processor_SendsTelegramVideoWhenRecordingClipDownloaded()
         {
-            Configure();
-
             string clipPath = Path.Combine(_workspace, "clip.mp4");
             File.WriteAllBytes(clipPath, new byte[] { 1, 2, 3, 4 });
 
             FakeHttpClient httpClient = new();
-            Shared.HttpClient = httpClient;
+            Configure(httpClient: httpClient);
 
             FakeSynologyService synologyService = new(CreateJpeg(640, 360))
             {
@@ -144,18 +137,91 @@ namespace SynoAI.Tests
         }
 
         [Test]
+        public async Task Processor_ReturnsNotificationFailedWhenTelegramPhotoFails()
+        {
+            FakeHttpClient httpClient = new()
+            {
+                StatusCode = HttpStatusCode.BadRequest,
+                ResponseBody = @"{""ok"":false,""description"":""bad request""}"
+            };
+            Configure(new Dictionary<string, string>
+            {
+                ["HttpRetryCount"] = "0",
+                ["Notifiers:0:SendRecordingClip"] = "false"
+            }, httpClient);
+
+            FakeCameraQueue queue = new(new CameraEnqueueResult(CameraEnqueueStatus.Queued));
+            CameraTriggerProcessor processor = new(
+                new FakeAIService(new[]
+                {
+                    new AIPrediction
+                    {
+                        Label = "person",
+                        Confidence = 90,
+                        MinX = 10,
+                        MinY = 20,
+                        MaxX = 80,
+                        MaxY = 160
+                    }
+                }),
+                new FakeSynologyService(CreateJpeg(640, 360)),
+                queue,
+                new DetectionMemory(),
+                NullLogger<CameraTriggerProcessor>.Instance);
+
+            CameraProcessingStatus status = await processor.ProcessAsync("Entree", CancellationToken.None);
+
+            Assert.That(status, Is.EqualTo(CameraProcessingStatus.NotificationFailed));
+            Assert.That(httpClient.Requests.Select(x => x.AbsolutePath), Is.EqualTo(new[] { "/bottoken/sendPhoto" }));
+            Assert.That(queue.Delays, Is.EqualTo(new[] { Config.AIFailureDelayMs }));
+        }
+
+        [Test]
+        public async Task Processor_FiltersPredictionsAfterClampingToImageBounds()
+        {
+            FakeHttpClient httpClient = new();
+            Configure(new Dictionary<string, string>
+            {
+                ["Cameras:0:MinSizeX"] = "50",
+                ["Cameras:0:MinSizeY"] = "50",
+                ["Notifiers:0:SendRecordingClip"] = "false"
+            }, httpClient);
+
+            CameraTriggerProcessor processor = new(
+                new FakeAIService(new[]
+                {
+                    new AIPrediction
+                    {
+                        Label = "person",
+                        Confidence = 90,
+                        MinX = -100,
+                        MinY = -100,
+                        MaxX = 30,
+                        MaxY = 30
+                    }
+                }),
+                new FakeSynologyService(CreateJpeg(64, 64)),
+                new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)),
+                new DetectionMemory(),
+                NullLogger<CameraTriggerProcessor>.Instance);
+
+            CameraProcessingStatus status = await processor.ProcessAsync("Entree", CancellationToken.None);
+
+            Assert.That(status, Is.EqualTo(CameraProcessingStatus.NoValidObjectDetected));
+            Assert.That(httpClient.Requests, Is.Empty);
+        }
+
+        [Test]
         public async Task Processor_PerfectShot_SelectsHighestConfidenceSnapshot()
         {
+            FakeHttpClient httpClient = new();
             Configure(new Dictionary<string, string>
             {
                 ["PerfectShotEnabled"] = "true",
                 ["MaxSnapshots"] = "3",
                 ["DrawMode"] = "Off",
                 ["Notifiers:0:SendRecordingClip"] = "false"
-            });
-
-            FakeHttpClient httpClient = new();
-            Shared.HttpClient = httpClient;
+            }, httpClient);
 
             FakeSynologyService synologyService = new(new[]
             {
@@ -201,15 +267,13 @@ namespace SynoAI.Tests
         [Test]
         public async Task Processor_StationaryObjectFilter_SuppressesRepeatedObject()
         {
+            FakeHttpClient httpClient = new();
             Configure(new Dictionary<string, string>
             {
                 ["StationaryObjectIgnoreSeconds"] = "300",
                 ["StationaryObjectMovementThresholdPixels"] = "20",
                 ["Notifiers:0:SendRecordingClip"] = "false"
-            });
-
-            FakeHttpClient httpClient = new();
-            Shared.HttpClient = httpClient;
+            }, httpClient);
 
             DetectionMemory detectionMemory = new();
             FakeAIService aiService = new(new[]
@@ -253,7 +317,7 @@ namespace SynoAI.Tests
             };
         }
 
-        private static void Configure(Dictionary<string, string> overrides = null)
+        private static void Configure(Dictionary<string, string> overrides = null, IHttpClient httpClient = null)
         {
             Dictionary<string, string> values = new()
             {
@@ -285,7 +349,7 @@ namespace SynoAI.Tests
                 .AddInMemoryCollection(values)
                 .Build();
 
-            Config.Generate(NullLogger.Instance, configuration);
+            Config.Generate(NullLogger.Instance, configuration, httpClient);
         }
 
         private static byte[] CreateJpeg(int width, int height)
@@ -431,6 +495,8 @@ namespace SynoAI.Tests
         {
             public TimeSpan Timeout { get; set; }
             public List<Uri> Requests { get; } = new();
+            public HttpStatusCode StatusCode { get; set; } = HttpStatusCode.OK;
+            public string ResponseBody { get; set; } = @"{""ok"":true}";
 
             public Task<HttpResponseMessage> PostAsync(string requestUri, HttpContent content)
             {
@@ -445,9 +511,9 @@ namespace SynoAI.Tests
             public Task<HttpResponseMessage> PostAsync(Uri requestUri, HttpContent content, CancellationToken cancellationToken)
             {
                 Requests.Add(requestUri);
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
+                return Task.FromResult(new HttpResponseMessage(StatusCode)
                 {
-                    Content = new StringContent(@"{""ok"":true}")
+                    Content = new StringContent(ResponseBody)
                 });
             }
         }

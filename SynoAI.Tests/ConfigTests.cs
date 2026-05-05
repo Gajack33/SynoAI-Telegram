@@ -142,6 +142,55 @@ namespace SynoAI.Tests
             Assert.That(errors, Does.Contain("AI:Path must be a relative path."));
         }
 
+        [Test]
+        public void ValidateStartupConfiguration_RequiresSeparateImageTokenWhenPhotoBaseUrlIsConfigured()
+        {
+            Dictionary<string, string> values = CreateCompleteConfig();
+            values["Notifiers:0:PhotoBaseURL"] = "https://synoai.example";
+            GenerateConfig(values);
+
+            IReadOnlyList<string> errors = Config.ValidateStartupConfiguration();
+
+            Assert.That(errors, Does.Contain("ImageAccessToken is required when Telegram PhotoBaseURL is configured."));
+        }
+
+        [Test]
+        public void ValidateStartupConfiguration_AllowsPhotoBaseUrlWithSeparateImageToken()
+        {
+            Dictionary<string, string> values = CreateCompleteConfig();
+            values["Notifiers:0:PhotoBaseURL"] = "https://synoai.example";
+            values["ImageAccessToken"] = "image-secret-token";
+            GenerateConfig(values);
+
+            Assert.That(Config.ValidateStartupConfiguration(), Is.Empty);
+        }
+
+        [Test]
+        public void ValidateStartupConfiguration_RejectsImageTokenMatchingActionToken()
+        {
+            Dictionary<string, string> values = CreateCompleteConfig();
+            values["Notifiers:0:PhotoBaseURL"] = "https://synoai.example";
+            values["ImageAccessToken"] = "secret-token";
+            GenerateConfig(values);
+
+            IReadOnlyList<string> errors = Config.ValidateStartupConfiguration();
+
+            Assert.That(errors, Does.Contain("ImageAccessToken must be different from AccessToken when Telegram PhotoBaseURL is configured."));
+        }
+
+        [Test]
+        public void ValidateStartupConfiguration_RejectsNonHttpsPhotoBaseUrl()
+        {
+            Dictionary<string, string> values = CreateCompleteConfig();
+            values["Notifiers:0:PhotoBaseURL"] = "http://synoai.example";
+            values["ImageAccessToken"] = "image-secret-token";
+            GenerateConfig(values);
+
+            IReadOnlyList<string> errors = Config.ValidateStartupConfiguration();
+
+            Assert.That(errors, Does.Contain("Telegram PhotoBaseURL must be an absolute https URL when configured."));
+        }
+
         private static void GenerateConfig(Dictionary<string, string> values)
         {
             IConfiguration configuration = new ConfigurationBuilder()

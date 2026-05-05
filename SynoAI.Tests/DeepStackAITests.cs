@@ -18,13 +18,11 @@ namespace SynoAI.Tests
 {
     public class DeepStackAITests
     {
-        private IHttpClient _previousHttpClient;
         private CultureInfo _previousCulture;
 
         [SetUp]
         public void Setup()
         {
-            _previousHttpClient = Shared.HttpClient;
             _previousCulture = Thread.CurrentThread.CurrentCulture;
             ConfigureCodeProjectAI();
         }
@@ -32,7 +30,6 @@ namespace SynoAI.Tests
         [TearDown]
         public void TearDown()
         {
-            Shared.HttpClient = _previousHttpClient;
             Thread.CurrentThread.CurrentCulture = _previousCulture;
         }
 
@@ -41,9 +38,8 @@ namespace SynoAI.Tests
         {
             FakeHttpClient httpClient = new(
                 @"{""success"":true,""predictions"":[{""label"":""person"",""confidence"":95,""x_min"":10,""y_min"":20,""x_max"":110,""y_max"":220}],""inferenceMs"":42,""processMs"":50}");
-            Shared.HttpClient = httpClient;
 
-            IEnumerable<AIPrediction> predictions = await new DeepStackAI().Process(CreateLogger(), CreateCamera(50), new byte[] { 1, 2, 3 });
+            IEnumerable<AIPrediction> predictions = await new DeepStackAI(httpClient).Process(CreateLogger(), CreateCamera(50), new byte[] { 1, 2, 3 });
 
             AIPrediction prediction = predictions.Single();
             Assert.That(prediction.Label, Is.EqualTo("person"));
@@ -57,9 +53,8 @@ namespace SynoAI.Tests
         {
             Thread.CurrentThread.CurrentCulture = new CultureInfo("fr-FR");
             FakeHttpClient httpClient = new(@"{""success"":true,""predictions"":[]}");
-            Shared.HttpClient = httpClient;
 
-            await new DeepStackAI().Process(CreateLogger(), CreateCamera(50), new byte[] { 1, 2, 3 });
+            await new DeepStackAI(httpClient).Process(CreateLogger(), CreateCamera(50), new byte[] { 1, 2, 3 });
 
             Assert.That(httpClient.RequestBody, Does.Contain("0.5"));
             Assert.That(httpClient.RequestBody, Does.Not.Contain("0,5"));
@@ -83,9 +78,8 @@ namespace SynoAI.Tests
                 {
                     Content = new StringContent(@"{""success"":true,""predictions"":[{""label"":""person"",""confidence"":95,""x_min"":10,""y_min"":20,""x_max"":110,""y_max"":220}]}")
                 });
-            Shared.HttpClient = httpClient;
 
-            AIPrediction prediction = (await new DeepStackAI().Process(CreateLogger(), CreateCamera(50), new byte[] { 1, 2, 3 })).Single();
+            AIPrediction prediction = (await new DeepStackAI(httpClient).Process(CreateLogger(), CreateCamera(50), new byte[] { 1, 2, 3 })).Single();
 
             Assert.That(prediction.Label, Is.EqualTo("person"));
             Assert.That(httpClient.RequestCount, Is.EqualTo(2));
@@ -99,9 +93,8 @@ namespace SynoAI.Tests
                 ["MaxAIResponseBytes"] = "4"
             });
             FakeHttpClient httpClient = new(@"{""success"":true}");
-            Shared.HttpClient = httpClient;
 
-            IEnumerable<AIPrediction> predictions = await new DeepStackAI().Process(CreateLogger(), CreateCamera(50), new byte[] { 1, 2, 3 });
+            IEnumerable<AIPrediction> predictions = await new DeepStackAI(httpClient).Process(CreateLogger(), CreateCamera(50), new byte[] { 1, 2, 3 });
 
             Assert.That(predictions, Is.Null);
         }
@@ -117,9 +110,8 @@ namespace SynoAI.Tests
             });
             FakeHttpClient httpClient = new(
                 @"{""success"":true,""predictions"":[{""userid"":""pierre-id"",""confidence"":0.96,""x_min"":10,""y_min"":20,""x_max"":110,""y_max"":220}]}");
-            Shared.HttpClient = httpClient;
 
-            AIPrediction prediction = (await new DeepStackAI().Process(CreateLogger(), CreateCamera(50), new byte[] { 1, 2, 3 })).Single();
+            AIPrediction prediction = (await new DeepStackAI(httpClient).Process(CreateLogger(), CreateCamera(50), new byte[] { 1, 2, 3 })).Single();
 
             Assert.That(httpClient.RequestUri.AbsolutePath, Is.EqualTo("/v1/vision/face/recognize"));
             Assert.That(prediction.Label, Is.EqualTo("Pierre"));

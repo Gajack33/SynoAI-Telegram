@@ -58,11 +58,43 @@ namespace SynoAI.Tests
             Assert.That(url, Is.EqualTo("http://synoai.local/Image/Cam/capture.jpeg?width=300&token=secret-token"));
         }
 
-        private static void ConfigureToken(string token)
+        [Test]
+        public void IsImageAuthorized_UsesImageTokenWhenConfigured()
+        {
+            ConfigureToken("action-token", "image-token");
+            DefaultHttpContext context = new();
+            context.Request.QueryString = new QueryString("?token=image-token");
+
+            Assert.That(RequestAuthorization.IsImageAuthorized(context.Request), Is.True);
+            Assert.That(RequestAuthorization.IsAuthorized(context.Request), Is.False);
+        }
+
+        [Test]
+        public void IsImageAuthorized_RejectsActionTokenWhenImageTokenIsNotConfigured()
+        {
+            ConfigureToken("action-token");
+            DefaultHttpContext context = new();
+            context.Request.QueryString = new QueryString("?token=action-token");
+
+            Assert.That(RequestAuthorization.IsImageAuthorized(context.Request), Is.False);
+        }
+
+        [Test]
+        public void AppendImageToken_AddsConfiguredImageTokenToUrl()
+        {
+            ConfigureToken("action-token", "image-token");
+
+            string url = RequestAuthorization.AppendImageToken("http://synoai.local/Image/Cam/capture.jpeg?width=300");
+
+            Assert.That(url, Is.EqualTo("http://synoai.local/Image/Cam/capture.jpeg?width=300&token=image-token"));
+        }
+
+        private static void ConfigureToken(string token, string imageToken = null)
         {
             Dictionary<string, string> values = new()
             {
                 ["AccessToken"] = token,
+                ["ImageAccessToken"] = imageToken,
                 ["AI:Url"] = "http://deepstack:5000"
             };
 

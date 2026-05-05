@@ -114,6 +114,7 @@ namespace SynoAI.Services
                     }
 
                     List<AIPrediction> predictionList = predictions as List<AIPrediction> ?? predictions.ToList();
+                    predictionList = NormalizePredictions(camera, snapshot, predictionList);
 
                     _logger.LogInformation(
                         "{cameraName}: Snapshot {snapshotCount} of {maxSnapshots} contains {predictionCount} objects at EVENT TIME {elapsedMs}ms.",
@@ -354,6 +355,24 @@ namespace SynoAI.Services
             return validPredictions;
         }
 
+        private List<AIPrediction> NormalizePredictions(Camera camera, byte[] snapshot, IEnumerable<AIPrediction> predictions)
+        {
+            List<AIPrediction> predictionList = predictions?.ToList() ?? new List<AIPrediction>();
+            if (predictionList.Count == 0)
+            {
+                return predictionList;
+            }
+
+            using SKBitmap image = DecodeBitmap(snapshot);
+            if (image == null)
+            {
+                _logger.LogWarning("{cameraName}: Could not decode snapshot dimensions before filtering AI predictions.", camera.Name);
+                return predictionList;
+            }
+
+            return SnapshotManager.NormalizePredictions(camera, image.Width, image.Height, predictionList, _logger);
+        }
+
         private bool ShouldIncludePrediction(string cameraName, Camera camera, Stopwatch overallStopwatch, AIPrediction prediction)
         {
             if (camera.Exclusions != null && camera.Exclusions.Count > 0)
@@ -419,7 +438,17 @@ namespace SynoAI.Services
             List<INotifier> notifiers = GetMatchingNotifiers(
                 camera,
                 candidate.ValidPredictions.Select(x => x.Label).Distinct().ToList()).ToList();
-            await SendNotifications(camera, notification, notifiers);
+            try
+            {
+                await SendNotifications(camera, notification, notifiers);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "{cameraName}: Failed to send photo notification.", camera.Name);
+                _cameraQueue.AddCameraDelay(camera.Name, Config.AIFailureDelayMs);
+                return CameraProcessingStatus.NotificationFailed;
+            }
+
             _detectionMemory.RememberNotifiedPredictions(camera.Name, candidate.ValidPredictions);
             await AttachRecordingClipIfNeeded(camera, candidate.CapturedAt, notification, notifiers, cancellationToken);
             await SendRecordingClipNotifications(camera, notification, notifiers);

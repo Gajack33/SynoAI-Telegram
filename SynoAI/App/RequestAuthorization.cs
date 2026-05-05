@@ -13,7 +13,17 @@ namespace SynoAI.App
 
         public static bool IsAuthorized(HttpRequest request)
         {
-            if (string.IsNullOrWhiteSpace(Config.AccessToken))
+            return IsAuthorized(request, Config.AccessToken);
+        }
+
+        public static bool IsImageAuthorized(HttpRequest request)
+        {
+            return IsAuthorized(request, GetImageAccessToken());
+        }
+
+        private static bool IsAuthorized(HttpRequest request, string expectedToken)
+        {
+            if (string.IsNullOrWhiteSpace(expectedToken))
             {
                 return false;
             }
@@ -34,7 +44,7 @@ namespace SynoAI.App
                 }
             }
 
-            return TokenEquals(Config.AccessToken, suppliedToken);
+            return TokenEquals(expectedToken, suppliedToken);
         }
 
         public static string AppendToken(string url)
@@ -48,6 +58,25 @@ namespace SynoAI.App
             string separator = string.IsNullOrWhiteSpace(builder.Query) ? string.Empty : builder.Query.TrimStart('?') + "&";
             builder.Query = $"{separator}{TokenQueryName}={Uri.EscapeDataString(Config.AccessToken)}";
             return builder.Uri.ToString();
+        }
+
+        public static string AppendImageToken(string url)
+        {
+            string token = GetImageAccessToken();
+            if (string.IsNullOrWhiteSpace(token) || string.IsNullOrWhiteSpace(url))
+            {
+                return url;
+            }
+
+            UriBuilder builder = new(url);
+            string separator = string.IsNullOrWhiteSpace(builder.Query) ? string.Empty : builder.Query.TrimStart('?') + "&";
+            builder.Query = $"{separator}{TokenQueryName}={Uri.EscapeDataString(token)}";
+            return builder.Uri.ToString();
+        }
+
+        private static string GetImageAccessToken()
+        {
+            return Config.ImageAccessToken;
         }
 
         private static bool TokenEquals(string expected, string supplied)

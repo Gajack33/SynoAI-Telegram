@@ -12,7 +12,7 @@ namespace SynoAI.Controllers
         [Route("Image/{cameraName}/{**filename}")]
         public ActionResult Get(string cameraName, string filename)
         {
-            if (!RequestAuthorization.IsAuthorized(Request))
+            if (!RequestAuthorization.IsImageAuthorized(Request))
             {
                 return Unauthorized();
             }

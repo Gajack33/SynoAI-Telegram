@@ -7,6 +7,7 @@ namespace SynoAI.Services
         ValidObjectDetected,
         AiProcessingFailed,
         ImageAnnotationFailed,
+        NotificationFailed,
         ProcessingFailed
     }
 }

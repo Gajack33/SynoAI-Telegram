@@ -17,20 +17,6 @@ namespace SynoAI.Tests
 {
     public class AIServiceTests
     {
-        private IHttpClient _previousHttpClient;
-
-        [SetUp]
-        public void Setup()
-        {
-            _previousHttpClient = Shared.HttpClient;
-        }
-
-        [TearDown]
-        public void TearDown()
-        {
-            Shared.HttpClient = _previousHttpClient;
-        }
-
         [Test]
         public async Task ProcessAsync_ScalesResizedDetectionsBackToOriginalCoordinates()
         {
@@ -42,11 +28,11 @@ namespace SynoAI.Tests
                 ["AI:JpegQuality"] = "90"
             });
 
-            Shared.HttpClient = new FakeHttpClient(
+            FakeHttpClient httpClient = new(
                 @"{""success"":true,""predictions"":[{""label"":""person"",""confidence"":90,""x_min"":10,""y_min"":15,""x_max"":110,""y_max"":215}]}");
 
             byte[] image = CreateJpeg(2000, 1000);
-            AIService service = new(NullLogger<AIService>.Instance);
+            AIService service = new(NullLogger<AIService>.Instance, httpClient);
 
             AIPrediction prediction = (await service.ProcessAsync(
                 new Camera { Name = "Entree", Threshold = 50 },
