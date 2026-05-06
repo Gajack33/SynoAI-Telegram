@@ -197,6 +197,29 @@ namespace SynoAI.Tests
         }
 
         [Test]
+        public void SelectRecordingForDetection_UsesLocalFilePathTimestampWhenUnixSuffixIsMissing()
+        {
+            DateTimeOffset detectedAt = new(2026, 5, 6, 9, 2, 45, TimeSpan.FromHours(2));
+
+            SynologyRecording selected = SynologyService.SelectRecordingForDetection(new[]
+            {
+                new SynologyRecording
+                {
+                    Id = 1,
+                    FilePath = "20260506AM/Entree20260506-090200.mp4"
+                },
+                new SynologyRecording
+                {
+                    Id = 2,
+                    FilePath = "20260506AM/Entree20260506-085900.mp4"
+                }
+            }, detectedAt);
+
+            Assert.That(selected.Id, Is.EqualTo(1));
+            Assert.That(SynologyService.ShouldRetryWithRecentRecordingList(new[] { selected }, selected, detectedAt), Is.False);
+        }
+
+        [Test]
         public void SelectRecordingForDetection_UsesStopTimeWhenEndTimeIsImplausible()
         {
             DateTimeOffset detectedAt = DateTimeOffset.FromUnixTimeSeconds(1_714_821_600);
@@ -357,6 +380,36 @@ namespace SynoAI.Tests
             DateTimeOffset? start = SynologyService.GetRecordingStartTime(recording);
 
             Assert.That(start, Is.EqualTo(DateTimeOffset.FromUnixTimeSeconds(1_714_821_540)));
+        }
+
+        [Test]
+        public void GetRecordingStartTime_FallsBackToLocalFilePathTimestampUsingReferenceOffset()
+        {
+            DateTimeOffset detectedAt = new(2026, 5, 6, 9, 2, 45, TimeSpan.FromHours(2));
+            SynologyRecording recording = new()
+            {
+                FilePath = "20260506AM/Entree20260506-090200.mp4"
+            };
+
+            DateTimeOffset? start = SynologyService.GetRecordingStartTime(recording, detectedAt);
+
+            Assert.That(start, Is.EqualTo(DateTimeOffset.FromUnixTimeSeconds(1_778_050_920)));
+        }
+
+        [Test]
+        public void TryCalculateRecordingDownloadWindowMs_UsesLocalFilePathTimestampWhenUnixSuffixIsMissing()
+        {
+            DateTimeOffset detectedAt = new(2026, 5, 6, 9, 2, 45, TimeSpan.FromHours(2));
+            SynologyRecording recording = new()
+            {
+                FilePath = "20260506AM/Entree20260506-090200.mp4"
+            };
+
+            bool calculated = SynologyService.TryCalculateRecordingDownloadWindowMs(recording, detectedAt, -5000, 10000, out int offsetMs, out int playTimeMs);
+
+            Assert.That(calculated, Is.True);
+            Assert.That(offsetMs, Is.EqualTo(40000));
+            Assert.That(playTimeMs, Is.EqualTo(10000));
         }
 
         [Test]

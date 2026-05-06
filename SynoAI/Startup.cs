@@ -16,6 +16,12 @@ namespace SynoAI
         // This method gets called by the runtime. Use this method to add services to the container.
         public void ConfigureServices(IServiceCollection services)
         {
+            services.AddLogging(logging =>
+            {
+                logging.AddFilter("System.Net.Http.HttpClient.synoai-outbound", LogLevel.Warning);
+                logging.AddFilter("System.Net.Http.HttpClient.synoai-outbound.LogicalHandler", LogLevel.Warning);
+                logging.AddFilter("System.Net.Http.HttpClient.synoai-outbound.ClientHandler", LogLevel.Warning);
+            });
             services.AddHttpClient(HttpClientWrapper.OutboundClientName);
             services.AddSingleton<IHttpClient, HttpClientWrapper>();
             services.AddSingleton<SynologyCookieStore>();

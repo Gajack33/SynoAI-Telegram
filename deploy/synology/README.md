@@ -67,8 +67,10 @@ Replace these placeholders:
   Surveillance Station.
 - `CameraMessageThreadIDs`: optional Telegram forum topic IDs per camera.
 
-The compose file uses `TZ=UTC` by default. Change it to your IANA timezone, for
-example `Europe/Paris`, if you want container timestamps to match local time.
+The compose file sets SynoAI-Telegram to `TZ=Europe/Paris`. Change it to your
+NAS IANA timezone if your Surveillance Station uses another timezone. This is
+important for recording clips because some Synology versions encode the
+recording start time only in the local-time filename.
 
 For DSM over HTTPS, use:
 

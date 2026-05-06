@@ -191,6 +191,11 @@ Telegram receives very short clips, increase `RecordingClipDownloadDelayMs` so
 Surveillance Station has time to write more of the current recording before
 SynoAI-Telegram downloads it.
 
+Set the SynoAI container `TZ` environment variable to the same timezone as the
+NAS. Some Synology versions expose recording time through local-time filenames,
+and SynoAI uses the container timezone when it has to infer a clip start time
+from that filename.
+
 `PhotoBaseURL` should normally stay empty. In that mode SynoAI-Telegram uploads
 the processed image directly to Telegram, which works on a private LAN. If you
 set `PhotoBaseURL`, Telegram receives a URL such as
