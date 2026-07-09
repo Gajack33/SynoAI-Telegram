@@ -52,6 +52,7 @@ namespace SynoAI
 
             services.AddHostedService<CaptureCleanupService>();
             services.AddHostedService<AppLifecycleService>();
+            services.AddHostedService<CameraStatusMonitorService>();
             services.AddHostedService<CameraProcessingWorker>();
             services.AddHostedService<RecordingClipWorker>();
 

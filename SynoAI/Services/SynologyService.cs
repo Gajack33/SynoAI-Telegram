@@ -42,7 +42,7 @@ namespace SynoAI.Services
 
         private const string URI_INFO = "webapi/query.cgi?api=SYNO.API.Info&version=1&method=query";
         private const string URI_LOGIN = "webapi/{0}";
-        private const string URI_CAMERA_INFO = "webapi/{0}?api=SYNO.SurveillanceStation.Camera&method=List&version={1}";
+        private const string URI_CAMERA_INFO = "webapi/{0}?api=SYNO.SurveillanceStation.Camera&method=List&version={1}&basic=true";
         private const string URI_CAMERA_SNAPSHOT = "webapi/{0}?version={1}&id={2}&api=SYNO.SurveillanceStation.Camera&method=GetSnapshot&profileType={3}";
         private const string URI_RECORDING_LIST = "webapi/{0}?api=SYNO.SurveillanceStation.Recording&method=List&version=6&cameraIds={1}&offset=0&limit={2}&fromTime={3}&toTime=0";
         private const string URI_RECORDING_LIST_RECENT = "webapi/{0}?api=SYNO.SurveillanceStation.Recording&method=List&version=6&cameraIds={1}&offset=0&limit={2}";
@@ -280,9 +280,20 @@ namespace SynoAI.Services
         /// <returns>A list of all cameras.</returns>
         public async Task<IEnumerable<SynologyCamera>> GetCamerasAsync()
         {
-            _logger.LogInformation("GetCameras: Fetching Cameras");
+            return await GetCamerasAsync(retryAfterLogin: true);
+        }
+
+        private async Task<IEnumerable<SynologyCamera>> GetCamerasAsync(bool retryAfterLogin)
+        {
+            _logger.LogDebug("GetCameras: Fetching Cameras");
 
             HttpClient client = GetHttpClient();
+            if (await EnsureCookieAsync() == null)
+            {
+                _logger.LogError("GetCameras: Cannot fetch cameras because Synology login failed.");
+                return null;
+            }
+
             _cookieContainer.Add(client.BaseAddress, new Cookie("id", Cookie.Value));
 
             string cameraInfoUri = string.Format(URI_CAMERA_INFO, _cameraPath, Config.ApiVersionCamera);
@@ -290,15 +301,29 @@ namespace SynoAI.Services
                 () => client.GetAsync(cameraInfoUri),
                 "get cameras");
 
-            SynologyResponse<SynologyCameras> response = await GetResponse<SynologyCameras>(result);
-            if (response.Success)
+            if (!result.IsSuccessStatusCode)
             {
-                _logger.LogInformation($"GetCameras: Successful. Found {response.Data.Cameras.Count()} cameras.");
-                return response.Data.Cameras;
+                _logger.LogError("GetCameras: Failed due to HTTP status code '{statusCode}'", result.StatusCode);
+                return null;
             }
-            else
+
+            SynologyResponse<SynologyCameras> response = await GetResponse<SynologyCameras>(result);
+            if (response?.Success == true)
             {
-                _logger.LogError($"GetCameras: Failed due to error code '{response.Error.Code}'");
+                IEnumerable<SynologyCamera> cameras = response.Data?.Cameras ?? Enumerable.Empty<SynologyCamera>();
+                _logger.LogDebug("GetCameras: Successful. Found {cameraCount} cameras.", cameras.Count());
+                return cameras;
+            }
+
+            _logger.LogError("GetCameras: Failed due to error code '{errorCode}'", response?.Error?.Code);
+            if (retryAfterLogin && IsAuthenticationError(response))
+            {
+                _logger.LogInformation("GetCameras: Synology session appears expired. Logging in again and retrying.");
+                Cookie = await RefreshCookieAsync();
+                if (Cookie != null)
+                {
+                    return await GetCamerasAsync(retryAfterLogin: false);
+                }
             }
 
             return null;

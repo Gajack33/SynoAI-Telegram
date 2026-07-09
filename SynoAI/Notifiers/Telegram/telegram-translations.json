@@ -2,6 +2,8 @@
   "en": {
     "Culture": "en-US",
     "PhotoCaptionTitle": "Camera alert - {cameraName}",
+    "CameraOnlineTitle": "✅ Camera online - {cameraName}",
+    "CameraOfflineTitle": "🔴 Camera offline - {cameraName}",
     "TimeLabel": "Time",
     "DetectionLabel": "Detection",
     "VideoCaption": "Video clip - {cameraName}",
@@ -49,6 +51,8 @@
   "fr": {
     "Culture": "fr-FR",
     "PhotoCaptionTitle": "Alerte cam\u00e9ra - {cameraName}",
+    "CameraOnlineTitle": "✅ Cam\u00e9ra en ligne - {cameraName}",
+    "CameraOfflineTitle": "🔴 Cam\u00e9ra hors ligne - {cameraName}",
     "TimeLabel": "Heure",
     "DetectionLabel": "D\u00e9tection",
     "VideoCaption": "Extrait vid\u00e9o - {cameraName}",

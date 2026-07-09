@@ -5,6 +5,7 @@ namespace SynoAI.Models
     public class SynologyCamera
     {
         public int Id { get; set; }
+        public SynologyCameraStatus Status { get; set; }
         [JsonProperty("Name")]
         public string NameOld { get; set; }
         [JsonProperty("newName")]
