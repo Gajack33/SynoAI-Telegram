@@ -17,6 +17,7 @@ namespace SynoAI.Services
         private readonly IAIService _aiService;
         private readonly ISynologyService _synologyService;
         private readonly ICameraProcessingQueue _cameraQueue;
+        private readonly IRecordingClipQueue _recordingClipQueue;
         private readonly IDetectionMemory _detectionMemory;
         private readonly ILogger<CameraTriggerProcessor> _logger;
 
@@ -24,12 +25,14 @@ namespace SynoAI.Services
             IAIService aiService,
             ISynologyService synologyService,
             ICameraProcessingQueue cameraQueue,
+            IRecordingClipQueue recordingClipQueue,
             IDetectionMemory detectionMemory,
             ILogger<CameraTriggerProcessor> logger)
         {
             _aiService = aiService;
             _synologyService = synologyService;
             _cameraQueue = cameraQueue;
+            _recordingClipQueue = recordingClipQueue;
             _detectionMemory = detectionMemory;
             _logger = logger;
         }
@@ -202,7 +205,7 @@ namespace SynoAI.Services
                                 candidate.Score);
                         }
 
-                        CameraProcessingStatus status = await SendValidSnapshotAsync(camera, candidate, cancellationToken);
+                        CameraProcessingStatus status = await SendValidSnapshotAsync(camera, candidate);
                         if (status != CameraProcessingStatus.ValidObjectDetected)
                         {
                             return status;
@@ -250,7 +253,7 @@ namespace SynoAI.Services
                         perfectShotCandidates.Count,
                         candidate.Score);
 
-                    CameraProcessingStatus status = await SendValidSnapshotAsync(camera, candidate, cancellationToken);
+                    CameraProcessingStatus status = await SendValidSnapshotAsync(camera, candidate);
                     if (status != CameraProcessingStatus.ValidObjectDetected)
                     {
                         return status;
@@ -412,8 +415,7 @@ namespace SynoAI.Services
 
         private async Task<CameraProcessingStatus> SendValidSnapshotAsync(
             Camera camera,
-            SnapshotCandidate candidate,
-            CancellationToken cancellationToken)
+            SnapshotCandidate candidate)
         {
             ProcessedImage processedImage = SnapshotManager.DressImage(
                 camera,
@@ -450,8 +452,7 @@ namespace SynoAI.Services
             }
 
             _detectionMemory.RememberNotifiedPredictions(camera.Name, candidate.ValidPredictions);
-            await AttachRecordingClipIfNeeded(camera, candidate.CapturedAt, notification, notifiers, cancellationToken);
-            await SendRecordingClipNotifications(camera, notification, notifiers);
+            QueueRecordingClip(camera, candidate.CapturedAt, notifiers);
 
             return CameraProcessingStatus.ValidObjectDetected;
         }
@@ -592,65 +593,33 @@ namespace SynoAI.Services
                 ).ToList();
         }
 
-        private async Task AttachRecordingClipIfNeeded(
+        private void QueueRecordingClip(
             Camera camera,
             DateTimeOffset detectedAt,
-            Notification notification,
-            IEnumerable<INotifier> notifiers,
-            CancellationToken cancellationToken)
+            IEnumerable<INotifier> notifiers)
         {
-            IRecordingClipNotifier recordingClipNotifier = notifiers
-                .OfType<IRecordingClipNotifier>()
-                .FirstOrDefault(x => x.SendRecordingClip);
-
-            if (recordingClipNotifier == null)
-            {
-                return;
-            }
-
-            try
-            {
-                int downloadDelayMs = Math.Max(0, recordingClipNotifier.RecordingClipDownloadDelayMs);
-                if (downloadDelayMs > 0)
-                {
-                    _logger.LogInformation(
-                        "{cameraName}: Waiting {delayMs}ms before downloading the recording clip.",
-                        camera.Name,
-                        downloadDelayMs);
-                    await Task.Delay(downloadDelayMs, cancellationToken);
-                }
-
-                notification.RecordingClip = await _synologyService.DownloadLatestRecordingClipAsync(
-                    camera.Name,
-                    detectedAt,
-                    recordingClipNotifier.RecordingClipOffsetMs,
-                    recordingClipNotifier.RecordingClipDurationMs);
-
-                if (notification.RecordingClip == null)
-                {
-                    _logger.LogWarning("{cameraName}: Recording clip was not available; skipping video notification.", camera.Name);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "{cameraName}: Recording clip download failed after photo notifications were sent.", camera.Name);
-            }
-        }
-
-        private async Task SendRecordingClipNotifications(Camera camera, Notification notification, IEnumerable<INotifier> notifiers)
-        {
-            List<Task> tasks = notifiers
+            List<IRecordingClipNotifier> recordingClipNotifiers = notifiers
                 .OfType<IRecordingClipNotifier>()
                 .Where(x => x.SendRecordingClip)
-                .Select(x => x.SendRecordingClipAsync(camera, notification, _logger))
                 .ToList();
 
-            if (tasks.Count == 0)
+            if (recordingClipNotifiers.Count == 0)
             {
                 return;
             }
 
-            await Task.WhenAll(tasks);
+            RecordingClipWorkItem workItem = new(camera, detectedAt, recordingClipNotifiers);
+            if (_recordingClipQueue.TryEnqueue(workItem))
+            {
+                _logger.LogInformation(
+                    "{cameraName}: Recording clip queued for background processing.",
+                    camera.Name);
+                return;
+            }
+
+            _logger.LogError(
+                "{cameraName}: Recording clip queue is full. The photo was sent, but this clip was skipped.",
+                camera.Name);
         }
 
         private async Task<byte[]> GetSnapshot(string cameraName)

@@ -151,7 +151,9 @@ Important settings are configured in `appsettings.json`:
 - `DuplicateSnapshotIgnoreSeconds`: ignores identical snapshot bytes within the
   configured window. `0` disables this filter.
 - `StationaryObjectIgnoreSeconds`: ignores detections matching recently
-  notified objects in nearly the same position. `0` disables this filter.
+  notified objects in nearly the same position. `0` disables this filter and
+  is recommended for transient classes such as `Person`, because different
+  people can cross the same coordinates within the configured window.
 - `MaxSnapshotBytes`, `MaxAIResponseBytes`, and `MaxRecordingClipBytes`: size
   limits for untrusted Synology/AI responses. Set to `0` only if you explicitly
   want to disable a limit.
@@ -189,7 +191,8 @@ people are still visible at the end of the clip, increase this value and raise
 `SynologyTimeoutSeconds` / `TelegramTimeoutSeconds` if transfers time out. If
 Telegram receives very short clips, increase `RecordingClipDownloadDelayMs` so
 Surveillance Station has time to write more of the current recording before
-SynoAI-Telegram downloads it.
+SynoAI-Telegram downloads it. Clip waiting, downloading, and Telegram upload run
+in the background so new camera triggers can still be analyzed.
 
 Set the SynoAI container `TZ` environment variable to the same timezone as the
 NAS. Some Synology versions expose recording time through local-time filenames,

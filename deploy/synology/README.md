@@ -104,7 +104,8 @@ downloaded while Surveillance Station is still writing the recording. Increase
 `RecordingClipDownloadDelayMs` so SynoAI-Telegram waits after sending the photo
 before it downloads and sends the video. For one camera, setting it close to
 `RecordingClipDurationMs` gives Surveillance Station time to make the requested
-duration available.
+duration available. This wait and the subsequent video transfer run in the
+background and do not keep the camera detection queue busy.
 
 `MaxSnapshotBytes`, `MaxAIResponseBytes`, and `MaxRecordingClipBytes` bound
 untrusted Synology and AI responses before they are decoded, parsed, or written
@@ -230,8 +231,9 @@ enabled, SynoAI-Telegram sends a recording clip afterward.
 
 - Too many alerts: increase `Threshold`, `MinSizeX`, `MinSizeY`, or
   `DelayAfterSuccess`.
-- Repeated identical alerts: set `DuplicateSnapshotIgnoreSeconds` or
-  `StationaryObjectIgnoreSeconds`.
+- Repeated identical alerts: set `DuplicateSnapshotIgnoreSeconds`. Use
+  `StationaryObjectIgnoreSeconds` only for objects expected to remain in place;
+  it can hide different people crossing nearly the same coordinates.
 - Better snapshot selection: enable `PerfectShotEnabled` with `MaxSnapshots`
   greater than `1`.
 - Large capture folders: set `CapturePathPattern` to `{camera}/{yyyy}/{MM}/{dd}`.

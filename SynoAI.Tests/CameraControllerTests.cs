@@ -7,6 +7,7 @@ using SkiaSharp;
 using SynoAI.App;
 using SynoAI.Controllers;
 using SynoAI.Models;
+using SynoAI.Notifiers;
 using SynoAI.Services;
 using System;
 using System.Collections.Generic;
@@ -62,15 +63,13 @@ namespace SynoAI.Tests
         }
 
         [Test]
-        public async Task Processor_SendsTelegramPhotoEvenWhenRecordingClipDownloadFails()
+        public async Task Processor_SendsTelegramPhotoAndQueuesRecordingClipWithoutWaitingForDownload()
         {
             FakeHttpClient httpClient = new();
             Configure(httpClient: httpClient);
 
-            FakeSynologyService synologyService = new(CreateJpeg(640, 360))
-            {
-                ThrowOnClipDownload = true
-            };
+            FakeSynologyService synologyService = new(CreateJpeg(640, 360));
+            FakeRecordingClipQueue recordingClipQueue = new();
 
             CameraTriggerProcessor processor = new(
                 new FakeAIService(new[]
@@ -87,53 +86,16 @@ namespace SynoAI.Tests
                 }),
                 synologyService,
                 new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)),
+                recordingClipQueue,
                 new DetectionMemory(),
                 NullLogger<CameraTriggerProcessor>.Instance);
 
             CameraProcessingStatus status = await processor.ProcessAsync("Entree", CancellationToken.None);
 
             Assert.That(status, Is.EqualTo(CameraProcessingStatus.ValidObjectDetected));
-            Assert.That(synologyService.ClipDownloadCalls, Is.EqualTo(1));
+            Assert.That(synologyService.ClipDownloadCalls, Is.Zero);
+            Assert.That(recordingClipQueue.WorkItems, Has.Count.EqualTo(1));
             Assert.That(httpClient.Requests.Select(x => x.AbsolutePath), Is.EqualTo(new[] { "/bottoken/sendPhoto" }));
-        }
-
-        [Test]
-        public async Task Processor_SendsTelegramVideoWhenRecordingClipDownloaded()
-        {
-            string clipPath = Path.Combine(_workspace, "clip.mp4");
-            File.WriteAllBytes(clipPath, new byte[] { 1, 2, 3, 4 });
-
-            FakeHttpClient httpClient = new();
-            Configure(httpClient: httpClient);
-
-            FakeSynologyService synologyService = new(CreateJpeg(640, 360))
-            {
-                ClipFilePath = clipPath
-            };
-
-            CameraTriggerProcessor processor = new(
-                new FakeAIService(new[]
-                {
-                    new AIPrediction
-                    {
-                        Label = "person",
-                        Confidence = 90,
-                        MinX = 10,
-                        MinY = 20,
-                        MaxX = 80,
-                        MaxY = 160
-                    }
-                }),
-                synologyService,
-                new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)),
-                new DetectionMemory(),
-                NullLogger<CameraTriggerProcessor>.Instance);
-
-            CameraProcessingStatus status = await processor.ProcessAsync("Entree", CancellationToken.None);
-
-            Assert.That(status, Is.EqualTo(CameraProcessingStatus.ValidObjectDetected));
-            Assert.That(synologyService.ClipDownloadCalls, Is.EqualTo(1));
-            Assert.That(httpClient.Requests.Select(x => x.AbsolutePath), Is.EqualTo(new[] { "/bottoken/sendPhoto", "/bottoken/sendVideo" }));
         }
 
         [Test]
@@ -166,6 +128,7 @@ namespace SynoAI.Tests
                 }),
                 new FakeSynologyService(CreateJpeg(640, 360)),
                 queue,
+                new FakeRecordingClipQueue(),
                 new DetectionMemory(),
                 NullLogger<CameraTriggerProcessor>.Instance);
 
@@ -202,6 +165,7 @@ namespace SynoAI.Tests
                 }),
                 new FakeSynologyService(CreateJpeg(64, 64)),
                 new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)),
+                new FakeRecordingClipQueue(),
                 new DetectionMemory(),
                 NullLogger<CameraTriggerProcessor>.Instance);
 
@@ -209,6 +173,34 @@ namespace SynoAI.Tests
 
             Assert.That(status, Is.EqualTo(CameraProcessingStatus.NoValidObjectDetected));
             Assert.That(httpClient.Requests, Is.Empty);
+        }
+
+        [Test]
+        public async Task RecordingClipProcessor_DownloadsAndSendsQueuedClip()
+        {
+            FakeHttpClient httpClient = new();
+            Configure(httpClient: httpClient);
+
+            string clipPath = Path.Combine(_workspace, "clip.mp4");
+            File.WriteAllBytes(clipPath, new byte[] { 1, 2, 3 });
+            FakeSynologyService synologyService = new(CreateJpeg(640, 360))
+            {
+                ClipFilePath = clipPath
+            };
+
+            IRecordingClipNotifier notifier = Config.Notifiers.OfType<IRecordingClipNotifier>().Single();
+            RecordingClipWorkItem workItem = new(
+                Config.Cameras.Single(),
+                DateTimeOffset.Now,
+                new[] { notifier });
+            RecordingClipProcessor processor = new(
+                synologyService,
+                NullLogger<RecordingClipProcessor>.Instance);
+
+            await processor.ProcessAsync(workItem, CancellationToken.None);
+
+            Assert.That(synologyService.ClipDownloadCalls, Is.EqualTo(1));
+            Assert.That(httpClient.Requests.Select(x => x.AbsolutePath), Is.EqualTo(new[] { "/bottoken/sendVideo" }));
         }
 
         [Test]
@@ -247,6 +239,7 @@ namespace SynoAI.Tests
                 aiService,
                 synologyService,
                 new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)),
+                new FakeRecordingClipQueue(),
                 new DetectionMemory(),
                 NullLogger<CameraTriggerProcessor>.Instance);
 
@@ -262,6 +255,42 @@ namespace SynoAI.Tests
             SKColor pixel = bitmap.GetPixel(5, 5);
             Assert.That(pixel.Green, Is.GreaterThan(pixel.Red));
             Assert.That(pixel.Green, Is.GreaterThan(pixel.Blue));
+        }
+
+        [Test]
+        public async Task Processor_MinimumSizeRejectsSmallPersonFalsePositive()
+        {
+            FakeHttpClient httpClient = new();
+            Configure(new Dictionary<string, string>
+            {
+                ["Cameras:0:MinSizeX"] = "100",
+                ["Cameras:0:MinSizeY"] = "200",
+                ["Notifiers:0:SendRecordingClip"] = "false"
+            }, httpClient);
+
+            CameraTriggerProcessor processor = new(
+                new FakeAIService(new[]
+                {
+                    new AIPrediction
+                    {
+                        Label = "person",
+                        Confidence = 83,
+                        MinX = 597,
+                        MinY = 676,
+                        MaxX = 667,
+                        MaxY = 836
+                    }
+                }),
+                new FakeSynologyService(CreateJpeg(960, 1080)),
+                new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)),
+                new FakeRecordingClipQueue(),
+                new DetectionMemory(),
+                NullLogger<CameraTriggerProcessor>.Instance);
+
+            CameraProcessingStatus status = await processor.ProcessAsync("Entree", CancellationToken.None);
+
+            Assert.That(status, Is.EqualTo(CameraProcessingStatus.NoValidObjectDetected));
+            Assert.That(httpClient.Requests, Is.Empty);
         }
 
         [Test]
@@ -292,6 +321,7 @@ namespace SynoAI.Tests
                     CreateJpeg(640, 360, SKColors.LightGray)
                 }),
                 new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)),
+                new FakeRecordingClipQueue(),
                 detectionMemory,
                 NullLogger<CameraTriggerProcessor>.Instance);
 
@@ -451,6 +481,22 @@ namespace SynoAI.Tests
                 }
 
                 return Task.FromResult<ProcessedFile>(null);
+            }
+        }
+
+        private sealed class FakeRecordingClipQueue : IRecordingClipQueue
+        {
+            public List<RecordingClipWorkItem> WorkItems { get; } = new();
+
+            public bool TryEnqueue(RecordingClipWorkItem workItem)
+            {
+                WorkItems.Add(workItem);
+                return true;
+            }
+
+            public ValueTask<RecordingClipWorkItem> ReadAsync(CancellationToken cancellationToken)
+            {
+                throw new NotSupportedException();
             }
         }
 

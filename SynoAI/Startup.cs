@@ -43,14 +43,17 @@ namespace SynoAI
                 });
 
             services.AddSingleton<ICameraProcessingQueue, CameraProcessingQueue>();
+            services.AddSingleton<IRecordingClipQueue, RecordingClipQueue>();
             services.AddSingleton<IDetectionMemory, DetectionMemory>();
             services.AddScoped<IAIService, AIService>();
             services.AddSingleton<ISynologyService, SynologyService>();
             services.AddScoped<ICameraTriggerProcessor, CameraTriggerProcessor>();
+            services.AddScoped<IRecordingClipProcessor, RecordingClipProcessor>();
 
             services.AddHostedService<CaptureCleanupService>();
             services.AddHostedService<AppLifecycleService>();
             services.AddHostedService<CameraProcessingWorker>();
+            services.AddHostedService<RecordingClipWorker>();
 
             services.AddControllers();
             services.AddHealthChecks()
