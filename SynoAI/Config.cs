@@ -252,6 +252,18 @@ namespace SynoAI
         /// Timeout in seconds for Telegram API calls.
         /// </summary>
         public static int TelegramTimeoutSeconds { get; private set; }
+        /// <summary>
+        /// Whether configured camera states are periodically monitored through Surveillance Station.
+        /// </summary>
+        public static bool CameraStatusMonitoringEnabled { get; private set; }
+        /// <summary>
+        /// Delay in seconds between camera status checks.
+        /// </summary>
+        public static int CameraStatusPollingIntervalSeconds { get; private set; }
+        /// <summary>
+        /// Number of consecutive observations required to confirm an online/offline transition.
+        /// </summary>
+        public static int CameraStatusConfirmationCount { get; private set; }
         /// Number of seconds during which an identical snapshot is ignored. 0 disables duplicate snapshot filtering.
         /// </summary>
         public static int DuplicateSnapshotIgnoreSeconds { get; private set; }
@@ -295,6 +307,17 @@ namespace SynoAI
             HttpRetryDelayMs = Math.Clamp(configuration.GetValue<int>("HttpRetryDelayMs", 1000), 0, 30000);
             SynologyTimeoutSeconds = Math.Max(1, configuration.GetValue<int?>("SynologyTimeoutSeconds") ?? HttpTimeoutSeconds);
             TelegramTimeoutSeconds = Math.Max(1, configuration.GetValue<int?>("TelegramTimeoutSeconds") ?? HttpTimeoutSeconds);
+
+            IConfigurationSection cameraStatusSection = configuration.GetSection("CameraStatusMonitoring");
+            CameraStatusMonitoringEnabled = cameraStatusSection.GetValue<bool>("Enabled", true);
+            CameraStatusPollingIntervalSeconds = Math.Clamp(
+                cameraStatusSection.GetValue<int>("PollingIntervalSeconds", 30),
+                5,
+                86400);
+            CameraStatusConfirmationCount = Math.Clamp(
+                cameraStatusSection.GetValue<int>("ConfirmationCount", 2),
+                1,
+                10);
 
             ApiVersionAuth = configuration.GetValue<int>("ApiVersionInfo", 6);      // DSM 6.0 beta2
             ApiVersionCamera = configuration.GetValue<int>("ApiVersionCamera", 9);  // Surveillance Station 8.0

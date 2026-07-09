@@ -66,6 +66,9 @@ Replace these placeholders:
 - `CAMERA_NAME_EXACTLY_AS_IN_SURVEILLANCE_STATION`: exact camera name from
   Surveillance Station.
 - `CameraMessageThreadIDs`: optional Telegram forum topic IDs per camera.
+- `CameraStatusMonitoring`: controls automatic online/offline checks. The
+  provided configuration checks every 30 seconds and requires two consecutive
+  observations before notifying.
 
 The compose file sets SynoAI-Telegram to `TZ=Europe/Paris`. Change it to your
 NAS IANA timezone if your Surveillance Station uses another timezone. This is
@@ -89,6 +92,13 @@ through a public URL that Telegram can fetch, because Telegram must be able to
 reach `/Image/...` from the internet. When `PhotoBaseURL` is set, configure an
 `ImageAccessToken` that is different from the Surveillance Station
 `AccessToken`.
+
+Set `SendCameraStatusNotifications` to `true` on a Telegram notifier to receive
+a message when a configured camera becomes unavailable and another when it
+returns to the normal state. These messages use the camera-specific forum topic
+from `CameraMessageThreadIDs` when configured. SynoAI-Telegram does not send an
+online message during a healthy startup, but it does report a camera that is
+already offline after the configured confirmation count.
 
 Set `SendRecordingClip` to `true` only after photo notifications are working.
 `RecordingClipOffsetMs` is applied relative to the snapshot where SynoAI detected
@@ -249,6 +259,9 @@ enabled, SynoAI-Telegram sends a recording clip afterward.
 - Debug exclusion zones: temporarily enable `DrawExclusions`.
 - Keep `PhotoBaseURL` empty for Telegram; SynoAI-Telegram uploads the photo
   directly. If you expose `/Image/...`, use a separate `ImageAccessToken`.
+- Delayed camera status alerts: reduce `CameraStatusMonitoring:ConfirmationCount`
+  to `1` or lower `PollingIntervalSeconds` (minimum `5`). Keep the default of
+  two confirmations if the camera connection occasionally flaps.
 
 ## 8. Telegram Translations
 

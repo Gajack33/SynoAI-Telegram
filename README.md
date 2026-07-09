@@ -19,6 +19,7 @@ deployment.
 - Optional DeepStack compatibility for existing setups.
 - Telegram-only notifications through direct Telegram Bot API calls.
 - Telegram forum topic routing globally or per camera.
+- Telegram alerts when a configured camera goes offline or comes back online.
 - Telegram caption translations through `telegram-translations.json`; English is
   the default and French is included.
 - Optional recording clip delivery after a positive detection.
@@ -154,6 +155,12 @@ Important settings are configured in `appsettings.json`:
   notified objects in nearly the same position. `0` disables this filter and
   is recommended for transient classes such as `Person`, because different
   people can cross the same coordinates within the configured window.
+- `CameraStatusMonitoring`: periodically reads the Surveillance Station camera
+  status. `Enabled` defaults to `true`, `PollingIntervalSeconds` defaults to
+  `30`, and `ConfirmationCount` defaults to `2` consecutive observations to
+  avoid alerts for brief state changes. A healthy startup does not send an
+  online alert; a camera already offline at startup does send an alert after
+  confirmation.
 - `MaxSnapshotBytes`, `MaxAIResponseBytes`, and `MaxRecordingClipBytes`: size
   limits for untrusted Synology/AI responses. Set to `0` only if you explicitly
   want to disable a limit.
@@ -162,6 +169,8 @@ Important settings are configured in `appsettings.json`:
 - `Language`: optional Telegram notifier language. The default is `en`; use
   `fr` for French captions.
 - `SendRecordingClip`: enables optional Telegram video clip delivery.
+- `SendCameraStatusNotifications`: enables online/offline messages for this
+  Telegram destination. Camera-specific notifier filters and topic IDs apply.
 
 Example Telegram notifier:
 
@@ -176,6 +185,7 @@ Example Telegram notifier:
   "CameraMessageThreadIDs": {
     "CAMERA_NAME_EXACTLY_AS_IN_SURVEILLANCE_STATION": 123
   },
+  "SendCameraStatusNotifications": true,
   "SendRecordingClip": false,
   "RecordingClipDownloadDelayMs": 30000,
   "RecordingClipOffsetMs": -5000,

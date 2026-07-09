@@ -206,6 +206,52 @@ namespace SynoAI.Tests
         }
 
         [Test]
+        public async Task SendCameraStatusAsync_UsesFrenchTextAndCameraTopic()
+        {
+            FakeHttpClient httpClient = new();
+            Telegram telegram = new(httpClient)
+            {
+                ChatID = "1",
+                Token = "token",
+                Language = "fr",
+                MessageThreadID = 100,
+                CameraMessageThreadIDs = new Dictionary<string, int>
+                {
+                    ["Entree"] = 321
+                }
+            };
+
+            await telegram.SendCameraStatusAsync(
+                new Camera { Name = "Entree" },
+                isOnline: false,
+                new DateTimeOffset(2026, 7, 9, 12, 30, 0, TimeSpan.Zero),
+                NullLogger.Instance);
+
+            Assert.That(httpClient.RequestUri.AbsolutePath, Is.EqualTo("/bottoken/sendMessage"));
+            Assert.That(httpClient.RequestBody, Does.Contain("Caméra hors ligne - Entree"));
+            Assert.That(httpClient.RequestBody, Does.Contain("321"));
+        }
+
+        [Test]
+        public async Task SendCameraStatusAsync_UsesOnlineText()
+        {
+            FakeHttpClient httpClient = new();
+            Telegram telegram = new(httpClient)
+            {
+                ChatID = "1",
+                Token = "token"
+            };
+
+            await telegram.SendCameraStatusAsync(
+                new Camera { Name = "Front" },
+                isOnline: true,
+                DateTimeOffset.UtcNow,
+                NullLogger.Instance);
+
+            Assert.That(httpClient.RequestBody, Does.Contain("Camera online - Front"));
+        }
+
+        [Test]
         public void SendAsync_ThrowsWhenPhotoCannotBeSent()
         {
             string imagePath = Path.Combine(_workspace, "capture.jpeg");
@@ -268,6 +314,19 @@ namespace SynoAI.Tests
             });
 
             Assert.That(telegram.RecordingClipDurationMs, Is.EqualTo(60000));
+        }
+
+        [Test]
+        public void Factory_AllowsCameraStatusNotificationsToBeDisabled()
+        {
+            Telegram telegram = CreateTelegramFromFactory(new Dictionary<string, string>
+            {
+                ["Notifiers:0:ChatID"] = "1",
+                ["Notifiers:0:Token"] = "token",
+                ["Notifiers:0:SendCameraStatusNotifications"] = "false"
+            });
+
+            Assert.That(telegram.SendCameraStatusNotifications, Is.False);
         }
 
         [Test]

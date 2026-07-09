@@ -31,6 +31,35 @@ namespace SynoAI.Tests
         }
 
         [Test]
+        public void Generate_DefaultsCameraStatusMonitoringToEnabledWithDebounce()
+        {
+            GenerateConfig(new Dictionary<string, string>
+            {
+                ["AI:Url"] = "http://codeproject-ai:32168"
+            });
+
+            Assert.That(Config.CameraStatusMonitoringEnabled, Is.True);
+            Assert.That(Config.CameraStatusPollingIntervalSeconds, Is.EqualTo(30));
+            Assert.That(Config.CameraStatusConfirmationCount, Is.EqualTo(2));
+        }
+
+        [Test]
+        public void Generate_ReadsAndClampsCameraStatusMonitoringOptions()
+        {
+            GenerateConfig(new Dictionary<string, string>
+            {
+                ["AI:Url"] = "http://codeproject-ai:32168",
+                ["CameraStatusMonitoring:Enabled"] = "false",
+                ["CameraStatusMonitoring:PollingIntervalSeconds"] = "1",
+                ["CameraStatusMonitoring:ConfirmationCount"] = "20"
+            });
+
+            Assert.That(Config.CameraStatusMonitoringEnabled, Is.False);
+            Assert.That(Config.CameraStatusPollingIntervalSeconds, Is.EqualTo(5));
+            Assert.That(Config.CameraStatusConfirmationCount, Is.EqualTo(10));
+        }
+
+        [Test]
         public void Generate_EnablesWarmupByDefaultForCodeProjectAI()
         {
             GenerateConfig(new Dictionary<string, string>

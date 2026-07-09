@@ -72,6 +72,8 @@ namespace SynoAI.Notifiers.Telegram
             {
                 Culture = "en-US",
                 PhotoCaptionTitle = "Camera alert - {cameraName}",
+                CameraOnlineTitle = "✅ Camera online - {cameraName}",
+                CameraOfflineTitle = "🔴 Camera offline - {cameraName}",
                 TimeLabel = "Time",
                 DetectionLabel = "Detection",
                 VideoCaption = "Video clip - {cameraName}",
@@ -97,6 +99,8 @@ namespace SynoAI.Notifiers.Telegram
     {
         public string Culture { get; set; } = "en-US";
         public string PhotoCaptionTitle { get; set; } = "Camera alert - {cameraName}";
+        public string CameraOnlineTitle { get; set; } = "✅ Camera online - {cameraName}";
+        public string CameraOfflineTitle { get; set; } = "🔴 Camera offline - {cameraName}";
         public string TimeLabel { get; set; } = "Time";
         public string DetectionLabel { get; set; } = "Detection";
         public string VideoCaption { get; set; } = "Video clip - {cameraName}";

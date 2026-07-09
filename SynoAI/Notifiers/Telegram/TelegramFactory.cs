@@ -28,6 +28,7 @@ namespace SynoAI.Notifiers.Telegram
                     .GetSection("CameraMessageThreadIDs")
                     .Get<Dictionary<string, int>>();
                 bool sendRecordingClip = section.GetValue<bool>("SendRecordingClip", false);
+                bool sendCameraStatusNotifications = section.GetValue<bool>("SendCameraStatusNotifications", true);
                 int configuredRecordingClipDownloadDelayMs = section.GetValue<int>("RecordingClipDownloadDelayMs", DefaultRecordingClipDownloadDelayMs);
                 int recordingClipDownloadDelayMs = Math.Clamp(
                     configuredRecordingClipDownloadDelayMs,
@@ -61,6 +62,7 @@ namespace SynoAI.Notifiers.Telegram
                     MessageThreadID = messageThreadId,
                     CameraMessageThreadIDs = cameraMessageThreadIds,
                     SendRecordingClip = sendRecordingClip,
+                    SendCameraStatusNotifications = sendCameraStatusNotifications,
                     RecordingClipDownloadDelayMs = recordingClipDownloadDelayMs,
                     RecordingClipOffsetMs = recordingClipOffsetMs,
                     RecordingClipDurationMs = recordingClipDurationMs

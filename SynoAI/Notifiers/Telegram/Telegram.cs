@@ -20,7 +20,7 @@ namespace SynoAI.Notifiers.Telegram
     /// <summary>
     /// Calls a third party API.
     /// </summary>
-    public class Telegram : NotifierBase, IRecordingClipNotifier
+    public class Telegram : NotifierBase, IRecordingClipNotifier, ICameraStatusNotifier
     {
         private readonly IHttpClient _httpClient;
 
@@ -74,6 +74,10 @@ namespace SynoAI.Notifiers.Telegram
         /// Clip duration in milliseconds.
         /// </summary>
         public int RecordingClipDurationMs { get; set; }
+        /// <summary>
+        /// Whether camera online/offline transitions should be sent to this Telegram destination.
+        /// </summary>
+        public bool SendCameraStatusNotifications { get; set; } = true;
 
         /// <summary>
         /// Sends a message and an image using the Telegram API.
@@ -112,6 +116,48 @@ namespace SynoAI.Notifiers.Telegram
             {
                 logger.LogError(ex, "{cameraName}: Telegram photo was sent, but the recording clip could not be sent.", camera.Name);
             }
+        }
+
+        public async Task SendCameraStatusAsync(
+            Camera camera,
+            bool isOnline,
+            DateTimeOffset changedAt,
+            ILogger logger)
+        {
+            if (!SendCameraStatusNotifications)
+            {
+                return;
+            }
+
+            TelegramTranslation translation = TelegramTranslationCatalog.Get(Language);
+            string title = isOnline ? translation.CameraOnlineTitle : translation.CameraOfflineTitle;
+            string message = string.Join(
+                Environment.NewLine,
+                translation.Format(title, camera),
+                $"{translation.TimeLabel}: {changedAt.ToLocalTime().ToString("g", translation.GetCulture())}");
+            int? messageThreadId = GetMessageThreadId(camera);
+            string url = $"https://api.telegram.org/bot{Token}/sendMessage";
+
+            await PostTelegramFormAsync(url, () =>
+            {
+                MultipartFormDataContent form = new()
+                {
+                    { new StringContent(ChatID), "chat_id" },
+                    { new StringContent(message), "text" }
+                };
+
+                if (messageThreadId.HasValue)
+                {
+                    form.Add(new StringContent(messageThreadId.Value.ToString()), "message_thread_id");
+                }
+
+                return form;
+            }, logger);
+
+            logger.LogInformation(
+                "{cameraName}: Telegram camera {status} notification sent successfully",
+                camera.Name,
+                isOnline ? "online" : "offline");
         }
 
         private async Task SendRecordingClipAsync(Camera camera, ProcessedFile recordingClip, int? messageThreadId, ILogger logger)
