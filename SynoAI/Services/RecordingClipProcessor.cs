@@ -12,13 +12,16 @@ namespace SynoAI.Services
     {
         private readonly ISynologyService _synologyService;
         private readonly ILogger<RecordingClipProcessor> _logger;
+        private readonly PipelineDiagnostics _diagnostics;
 
         public RecordingClipProcessor(
             ISynologyService synologyService,
-            ILogger<RecordingClipProcessor> logger)
+            ILogger<RecordingClipProcessor> logger,
+            PipelineDiagnostics diagnostics = null)
         {
             _synologyService = synologyService;
             _logger = logger;
+            _diagnostics = diagnostics;
         }
 
         public async Task ProcessAsync(RecordingClipWorkItem workItem, CancellationToken cancellationToken)
@@ -29,21 +32,14 @@ namespace SynoAI.Services
                 return;
             }
 
-            int downloadDelayMs = Math.Max(0, recordingClipNotifier.RecordingClipDownloadDelayMs);
-            if (downloadDelayMs > 0)
-            {
-                _logger.LogInformation(
-                    "{cameraName}: Waiting {delayMs}ms before downloading the recording clip in the background.",
-                    workItem.Camera.Name,
-                    downloadDelayMs);
-                await Task.Delay(downloadDelayMs, cancellationToken);
-            }
-
+            using var download = _diagnostics?.Begin("video-download", workItem.Camera.Name, cancellationToken,
+                TimeSpan.FromSeconds(Config.SynologyTimeoutSeconds + 5d));
             ProcessedFile recordingClip = await _synologyService.DownloadLatestRecordingClipAsync(
                 workItem.Camera.Name,
                 workItem.DetectedAt,
                 recordingClipNotifier.RecordingClipOffsetMs,
-                recordingClipNotifier.RecordingClipDurationMs);
+                recordingClipNotifier.RecordingClipDurationMs, cancellationToken);
+            download?.Complete(recordingClip != null);
             if (recordingClip == null)
             {
                 _logger.LogWarning(
@@ -60,7 +56,12 @@ namespace SynoAI.Services
 
             await Task.WhenAll(workItem.Notifiers
                 .Where(x => x.SendRecordingClip)
-                .Select(x => x.SendRecordingClipAsync(workItem.Camera, notification, _logger)));
+                .Select(async notifier =>
+                {
+                    using var operation = _diagnostics?.Begin("telegram-video", $"{workItem.Camera.Name}/{Config.Notifiers.ToList().IndexOf((INotifier)notifier)}", cancellationToken);
+                    await notifier.SendRecordingClipAsync(workItem.Camera, notification, _logger, cancellationToken);
+                    operation?.Complete(true);
+                }));
         }
     }
 }

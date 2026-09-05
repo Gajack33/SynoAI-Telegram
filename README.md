@@ -148,7 +148,8 @@ Important settings are configured in `appsettings.json`:
 - `CapturePathPattern`: capture directory pattern. The default is `{camera}`;
   use `{camera}/{yyyy}/{MM}/{dd}` to keep folders small.
 - `PerfectShotEnabled`: when `true`, SynoAI-Telegram evaluates every
-  `MaxSnapshots` attempt and sends the highest-confidence valid snapshot.
+  `MaxSnapshots` attempt and sends the highest-confidence valid snapshot. If a
+  later snapshot or AI request fails, an already valid candidate is still sent.
 - `DuplicateSnapshotIgnoreSeconds`: ignores identical snapshot bytes within the
   configured window. `0` disables this filter.
 - `StationaryObjectIgnoreSeconds`: ignores detections matching recently
@@ -160,11 +161,22 @@ Important settings are configured in `appsettings.json`:
   `30`, and `ConfirmationCount` defaults to `2` consecutive observations to
   avoid alerts for brief state changes. A healthy startup does not send an
   online alert; a camera already offline at startup does send an alert after
-  confirmation.
+  confirmation. Failed deliveries are retried on later polls for the affected
+  destination only; a newly confirmed state replaces an obsolete pending alert.
 - `MaxSnapshotBytes`, `MaxAIResponseBytes`, and `MaxRecordingClipBytes`: size
   limits for untrusted Synology/AI responses. Set to `0` only if you explicitly
   want to disable a limit.
-- `Cameras`: camera names and detection thresholds.
+- `MaxConcurrentRecordingClips`: maximum concurrent recording download/upload
+  jobs, default `2`, clamped to `1..8`. Up to 32 additional clips can wait in the
+  queue. The recording growth delay runs before a transfer slot is occupied.
+- `SynologyTimeoutSeconds`: total time budget for each snapshot or recording
+  clip operation, including login, lookup, retries and body transfer. Partial
+  clip files are removed if the transfer fails, exceeds its limit, or is cancelled.
+- `AI:TimeoutSeconds` / `TelegramTimeoutSeconds`: per-attempt timeouts covering
+  response headers and content. All network operations and retry waits honour
+  application shutdown. AI response size is checked while streaming.
+- `Cameras`: camera names and detection thresholds. Effective size limits and
+  delays are validated after applying camera overrides to global defaults.
 - `Notifiers`: Telegram notification settings.
 - `Language`: optional Telegram notifier language. The default is `en`; use
   `fr` for French captions.
@@ -226,6 +238,30 @@ Authorized requests can pass the token with:
 - Query string: `?token=...`
 - Header: `X-SynoAI-Token`
 - Bearer token: `Authorization: Bearer ...`
+
+## Reliability And Diagnostics
+
+Telegram retries respect `parameters.retry_after` when the server rate-limits
+requests. A camera remains reserved while its notification is pending, avoiding
+concurrent duplicate processing for that camera. Other cameras can progress
+during this wait; snapshot processing, AI inference and annotation still share a
+single analysis slot. Photos remain independent of the bounded video workers.
+
+`GET /health` checks the CodeProject.AI ping, write access to capture storage and
+observed pipeline failures or stalled snapshot/AI/annotation operations. The
+storage probe is a tiny temporary file that is immediately removed. No Telegram
+notification is sent by a health check. An observed stage failure remains unhealthy
+until that stage succeeds again (or an obsolete pending status alert is discarded).
+An idle system has no recent inference evidence; a successful ping alone does not
+prove that the configured model can detect objects.
+
+`GET /Diagnostics`, protected by `AccessToken` using the same mechanisms as camera
+triggers, exposes queue depths, active operations and the last success/failure
+per stage and target. Telegram targets use camera names and configuration indices,
+not bot tokens or chat IDs. `ImageAccessToken` does not grant diagnostic access.
+The default `/health` response remains a short status; detailed diagnostics require
+authorized access. This information and pending camera-state notifications are
+held in memory and reset when the application restarts.
 
 ## Security Notes
 

@@ -459,6 +459,93 @@ namespace SynoAI.Tests
             Assert.That(normalizedPath, Is.Null);
         }
 
+        [Test]
+        public async Task TakeSnapshotAsync_TimesOutWhileReadingBody()
+        {
+            Configure();
+            typeof(Config).GetProperty("SynologyTimeoutSeconds").SetValue(null, 1);
+            using ControlledReadStream body = new(stallAtEnd: true);
+            using HttpClient client = new(new TestHttpHandler(_ => ImageResponse(body)));
+            SynologyService service = CreateInitializedService(client);
+            Task<byte[]> request = service.TakeSnapshotAsync("Entree");
+            try
+            {
+                Assert.That(await request.WaitAsync(TimeSpan.FromSeconds(3)), Is.Null);
+                Assert.That(body.WasCancelled, Is.True);
+            }
+            finally { body.Release.TrySetResult(0); }
+        }
+
+        [Test]
+        public async Task TakeSnapshotAsync_PropagatesCallerCancellation()
+        {
+            Configure();
+            using ControlledReadStream body = new(stallAtEnd: true);
+            using HttpClient client = new(new TestHttpHandler(_ => ImageResponse(body)));
+            SynologyService service = CreateInitializedService(client);
+            using CancellationTokenSource stop = new();
+            Task<byte[]> request = service.TakeSnapshotAsync("Entree", stop.Token);
+            try
+            {
+                await body.Reading.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                stop.Cancel();
+                Assert.That(async () => await request.WaitAsync(TimeSpan.FromSeconds(3)), Throws.InstanceOf<OperationCanceledException>());
+                Assert.That(body.WasCancelled, Is.True);
+            }
+            finally { body.Release.TrySetResult(0); }
+        }
+
+        [TestCase(false)]
+        [TestCase(true)]
+        public async Task DownloadLatestRecordingClipAsync_RemovesPartialFileOnTimeoutOrCancellation(bool cancelFromCaller)
+        {
+            Configure();
+            typeof(Config).GetProperty("SynologyTimeoutSeconds").SetValue(null, 1);
+            string previous = Environment.CurrentDirectory;
+            string workspace = Path.Combine(Path.GetTempPath(), "synoai-transfer-" + Guid.NewGuid().ToString("N"));
+            Directory.CreateDirectory(workspace);
+            using ControlledReadStream body = new(3, stallAtEnd: true);
+            using CancellationTokenSource stop = new();
+            try
+            {
+                Environment.CurrentDirectory = workspace;
+                using HttpClient client = new(new TestHttpHandler(request => request.RequestUri.Query.Contains("method=List")
+                    ? new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new StringContent(@"{""success"":true,""data"":{""recordings"":[{""id"":1,""startTime"":1714821500,""endTime"":1714821800}]}}")
+                    }
+                    : new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(body) }));
+                SynologyService service = CreateInitializedService(client);
+                Task<ProcessedFile> download = service.DownloadLatestRecordingClipAsync("Entree",
+                    DateTimeOffset.FromUnixTimeSeconds(1714821600), 0, 5000, stop.Token);
+                await body.Reading.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                if (cancelFromCaller)
+                {
+                    stop.Cancel();
+                    Assert.That(async () => await download.WaitAsync(TimeSpan.FromSeconds(3)), Throws.InstanceOf<OperationCanceledException>());
+                }
+                else
+                {
+                    Assert.That(await download.WaitAsync(TimeSpan.FromSeconds(3)), Is.Null);
+                }
+                Assert.That(body.BytesRead, Is.EqualTo(3));
+                Assert.That(Directory.GetFiles(workspace, "*.mp4", SearchOption.AllDirectories), Is.Empty);
+            }
+            finally
+            {
+                body.Release.TrySetResult(0);
+                Environment.CurrentDirectory = previous;
+                Directory.Delete(workspace, true);
+            }
+        }
+
+        private static HttpResponseMessage ImageResponse(Stream body)
+        {
+            HttpResponseMessage response = new(HttpStatusCode.OK) { Content = new StreamContent(body) };
+            response.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("image/jpeg");
+            return response;
+        }
+
         private static void Configure()
         {
             IConfiguration configuration = new ConfigurationBuilder()

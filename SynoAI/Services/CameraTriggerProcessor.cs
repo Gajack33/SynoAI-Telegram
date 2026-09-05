@@ -20,6 +20,8 @@ namespace SynoAI.Services
         private readonly IRecordingClipQueue _recordingClipQueue;
         private readonly IDetectionMemory _detectionMemory;
         private readonly ILogger<CameraTriggerProcessor> _logger;
+        private readonly PipelineDiagnostics _diagnostics;
+        private readonly CameraAnalysisGate _analysisGate;
 
         public CameraTriggerProcessor(
             IAIService aiService,
@@ -27,7 +29,9 @@ namespace SynoAI.Services
             ICameraProcessingQueue cameraQueue,
             IRecordingClipQueue recordingClipQueue,
             IDetectionMemory detectionMemory,
-            ILogger<CameraTriggerProcessor> logger)
+            ILogger<CameraTriggerProcessor> logger,
+            CameraAnalysisGate analysisGate = null,
+            PipelineDiagnostics diagnostics = null)
         {
             _aiService = aiService;
             _synologyService = synologyService;
@@ -35,6 +39,8 @@ namespace SynoAI.Services
             _recordingClipQueue = recordingClipQueue;
             _detectionMemory = detectionMemory;
             _logger = logger;
+            _diagnostics = diagnostics;
+            _analysisGate = analysisGate;
         }
 
         public async Task<CameraProcessingStatus> ProcessAsync(string cameraName, CancellationToken cancellationToken)
@@ -57,6 +63,7 @@ namespace SynoAI.Services
                 }
 
                 Stopwatch overallStopwatch = Stopwatch.StartNew();
+                using IDisposable analysisLease = _analysisGate == null ? null : await _analysisGate.EnterAsync(cancellationToken);
                 int maxSnapshots = camera.GetMaxSnapshots();
                 List<SnapshotCandidate> perfectShotCandidates = new();
                 for (int snapshotCount = 1; snapshotCount <= maxSnapshots; snapshotCount++)
@@ -70,7 +77,16 @@ namespace SynoAI.Services
                         maxSnapshots,
                         overallStopwatch.ElapsedMilliseconds);
 
-                    byte[] snapshot = await GetSnapshot(cameraName);
+                    byte[] snapshot;
+                    try
+                    {
+                        snapshot = await GetSnapshot(cameraName, cancellationToken);
+                    }
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested && perfectShotCandidates.Count > 0)
+                    {
+                        _logger.LogWarning(ex, "{cameraName}: Later snapshot failed; keeping the available Perfect Shot candidates.", cameraName);
+                        break;
+                    }
                     if (snapshot == null)
                     {
                         continue;
@@ -109,9 +125,22 @@ namespace SynoAI.Services
                         continue;
                     }
 
-                    IEnumerable<AIPrediction> predictions = await GetAIPredications(camera, snapshot);
+                    IEnumerable<AIPrediction> predictions;
+                    try
+                    {
+                        predictions = await GetAIPredications(camera, snapshot, cancellationToken);
+                    }
+                    catch (Exception ex) when (!cancellationToken.IsCancellationRequested && perfectShotCandidates.Count > 0)
+                    {
+                        _logger.LogWarning(ex, "{cameraName}: Later AI attempt failed; keeping the available Perfect Shot candidates.", cameraName);
+                        break;
+                    }
                     if (predictions == null)
                     {
+                        if (perfectShotCandidates.Count > 0)
+                        {
+                            break;
+                        }
                         _cameraQueue.AddCameraDelay(cameraName, Config.AIFailureDelayMs);
                         return CameraProcessingStatus.AiProcessingFailed;
                     }
@@ -205,7 +234,7 @@ namespace SynoAI.Services
                                 candidate.Score);
                         }
 
-                        CameraProcessingStatus status = await SendValidSnapshotAsync(camera, candidate);
+                        CameraProcessingStatus status = await SendValidSnapshotAsync(camera, candidate, analysisLease, cancellationToken);
                         if (status != CameraProcessingStatus.ValidObjectDetected)
                         {
                             return status;
@@ -253,7 +282,7 @@ namespace SynoAI.Services
                         perfectShotCandidates.Count,
                         candidate.Score);
 
-                    CameraProcessingStatus status = await SendValidSnapshotAsync(camera, candidate);
+                    CameraProcessingStatus status = await SendValidSnapshotAsync(camera, candidate, analysisLease, cancellationToken);
                     if (status != CameraProcessingStatus.ValidObjectDetected)
                     {
                         return status;
@@ -415,14 +444,18 @@ namespace SynoAI.Services
 
         private async Task<CameraProcessingStatus> SendValidSnapshotAsync(
             Camera camera,
-            SnapshotCandidate candidate)
+            SnapshotCandidate candidate,
+            IDisposable analysisLease,
+            CancellationToken cancellationToken)
         {
+            using var annotation = _diagnostics?.Begin("annotation", camera.Name, cancellationToken, TimeSpan.FromMinutes(1));
             ProcessedImage processedImage = SnapshotManager.DressImage(
                 camera,
                 candidate.Snapshot,
                 candidate.Predictions,
                 candidate.ValidPredictions,
                 _logger);
+            annotation?.Complete(processedImage != null);
             if (processedImage == null)
             {
                 _logger.LogError("{cameraName}: Valid detections were found, but the snapshot could not be annotated.", camera.Name);
@@ -437,12 +470,20 @@ namespace SynoAI.Services
                 ValidPredictions = candidate.ValidPredictions
             };
 
+            // Annotation is finished. Telegram may ask us to wait, but other cameras can now be analysed.
+            analysisLease?.Dispose();
+            cancellationToken.ThrowIfCancellationRequested();
+
             List<INotifier> notifiers = GetMatchingNotifiers(
                 camera,
                 candidate.ValidPredictions.Select(x => x.Label).Distinct().ToList()).ToList();
             try
             {
-                await SendNotifications(camera, notification, notifiers);
+                await SendNotifications(camera, notification, notifiers, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {
@@ -569,14 +610,21 @@ namespace SynoAI.Services
             }
         }
 
-        private async Task SendNotifications(Camera camera, Notification notification, IEnumerable<INotifier> notifiers)
+        private async Task SendNotifications(Camera camera, Notification notification, IEnumerable<INotifier> notifiers, CancellationToken cancellationToken)
         {
             Stopwatch stopwatch = Stopwatch.StartNew();
 
             List<Task> tasks = new();
             foreach (INotifier notifier in notifiers)
             {
-                tasks.Add(notifier.SendAsync(camera, notification, _logger));
+                tasks.Add(SendOneAsync(notifier, Config.Notifiers.ToList().IndexOf(notifier)));
+            }
+
+            async Task SendOneAsync(INotifier notifier, int index)
+            {
+                using var operation = _diagnostics?.Begin("telegram-photo", $"{camera.Name}/{index}", cancellationToken);
+                await notifier.SendAsync(camera, notification, _logger, cancellationToken);
+                operation?.Complete(true);
             }
 
             await Task.WhenAll(tasks);
@@ -622,10 +670,12 @@ namespace SynoAI.Services
                 camera.Name);
         }
 
-        private async Task<byte[]> GetSnapshot(string cameraName)
+        private async Task<byte[]> GetSnapshot(string cameraName, CancellationToken cancellationToken)
         {
+            using var operation = _diagnostics?.Begin("snapshot", cameraName, cancellationToken,
+                TimeSpan.FromSeconds(Config.SynologyTimeoutSeconds + 5d));
             Stopwatch stopwatch = Stopwatch.StartNew();
-            byte[] imageBytes = await _synologyService.TakeSnapshotAsync(cameraName);
+            byte[] imageBytes = await _synologyService.TakeSnapshotAsync(cameraName, cancellationToken);
             stopwatch.Stop();
 
             if (imageBytes == null)
@@ -637,12 +687,17 @@ namespace SynoAI.Services
                 _logger.LogInformation("{cameraName}: Snapshot received in {elapsedMs}ms.", cameraName, stopwatch.ElapsedMilliseconds);
             }
 
+            operation?.Complete(imageBytes != null);
             return imageBytes;
         }
 
-        private async Task<IEnumerable<AIPrediction>> GetAIPredications(Camera camera, byte[] imageBytes)
+        private async Task<IEnumerable<AIPrediction>> GetAIPredications(Camera camera, byte[] imageBytes, CancellationToken cancellationToken)
         {
-            IEnumerable<AIPrediction> predictions = await _aiService.ProcessAsync(camera, imageBytes);
+            double budgetSeconds = (double)Config.AITimeoutSeconds * (Config.HttpRetryCount + 1)
+                + (double)Config.HttpRetryDelayMs * Config.HttpRetryCount * (Config.HttpRetryCount + 1) / 2000 + 5;
+            using var operation = _diagnostics?.Begin("ai", camera.Name, cancellationToken, TimeSpan.FromSeconds(budgetSeconds));
+            IEnumerable<AIPrediction> predictions = await _aiService.ProcessAsync(camera, imageBytes, cancellationToken);
+            operation?.Complete(predictions != null);
             if (predictions == null)
             {
                 _logger.LogError("{cameraName}: Failed to get predictions.", camera.Name);

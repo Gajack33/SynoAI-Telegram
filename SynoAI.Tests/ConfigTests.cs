@@ -1,3 +1,4 @@
+using System.Linq;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using NUnit.Framework;
@@ -218,6 +219,29 @@ namespace SynoAI.Tests
             IReadOnlyList<string> errors = Config.ValidateStartupConfiguration();
 
             Assert.That(errors, Does.Contain("Telegram PhotoBaseURL must be an absolute https URL when configured."));
+        }
+
+        [TestCase("Delay", "-1", "effective Delay")]
+        [TestCase("DelayAfterSuccess", "-1", "effective Delay")]
+        [TestCase("MinSizeX", "-1", "effective object sizes")]
+        [TestCase("MaxSizeY", "-1", "effective object sizes")]
+        [TestCase("MaxSizeX", "10", "effective minimum object sizes")]
+        public void ValidateStartupConfiguration_RejectsInvalidCameraOverrides(string key, string value, string error)
+        {
+            var values = CreateCompleteConfig();
+            values["Cameras:0:" + key] = value;
+            GenerateConfig(values);
+            Assert.That(Config.ValidateStartupConfiguration().Any(x => x.Contains("Camera 'Entree'") && x.Contains(error)), Is.True);
+        }
+
+        [Test]
+        public void ValidateStartupConfiguration_ValidatesInheritedCameraSizeLimits()
+        {
+            var values = CreateCompleteConfig();
+            values["MaxSizeX"] = "200";
+            values["Cameras:0:MinSizeX"] = "250";
+            GenerateConfig(values);
+            Assert.That(Config.ValidateStartupConfiguration(), Does.Contain("Camera 'Entree' effective minimum object sizes cannot exceed maximum sizes."));
         }
 
         private static void GenerateConfig(Dictionary<string, string> values)

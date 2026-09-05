@@ -23,6 +23,7 @@ namespace SynoAI.Notifiers.Telegram
     public class Telegram : NotifierBase, IRecordingClipNotifier, ICameraStatusNotifier
     {
         private readonly IHttpClient _httpClient;
+        private long _retryNotBeforeTicks;
 
         public Telegram()
             : this(new HttpClientWrapper())
@@ -85,7 +86,7 @@ namespace SynoAI.Notifiers.Telegram
         /// <param name="camera">The camera that triggered the notification.</param>
         /// <param name="notification">The notification data to process.</param>
         /// <param name="logger">A logger.</param>
-        public override async Task SendAsync(Camera camera, Notification notification, ILogger logger)
+        public override async Task SendAsync(Camera camera, Notification notification, ILogger logger, CancellationToken cancellationToken = default)
         {
             using (logger.BeginScope("Telegram"))
             {
@@ -95,13 +96,13 @@ namespace SynoAI.Notifiers.Telegram
 
                 string message = GetTelegramMessage(camera, notification);
                 int? messageThreadId = GetMessageThreadId(camera);
-                await SendPhotoAsync(camera, processedImage, message, messageThreadId, logger);
+                await SendPhotoAsync(camera, processedImage, message, messageThreadId, logger, cancellationToken);
 
                 logger.LogInformation("{cameraName}: Telegram notification sent successfully", cameraName);
             }
         }
 
-        public async Task SendRecordingClipAsync(Camera camera, Notification notification, ILogger logger)
+        public async Task SendRecordingClipAsync(Camera camera, Notification notification, ILogger logger, CancellationToken cancellationToken = default)
         {
             if (!SendRecordingClip || notification.RecordingClip == null)
             {
@@ -110,11 +111,12 @@ namespace SynoAI.Notifiers.Telegram
 
             try
             {
-                await SendRecordingClipAsync(camera, notification.RecordingClip, GetMessageThreadId(camera), logger);
+                await SendRecordingClipAsync(camera, notification.RecordingClip, GetMessageThreadId(camera), logger, cancellationToken);
             }
-            catch (Exception ex)
+            catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
                 logger.LogError(ex, "{cameraName}: Telegram photo was sent, but the recording clip could not be sent.", camera.Name);
+                throw;
             }
         }
 
@@ -122,7 +124,8 @@ namespace SynoAI.Notifiers.Telegram
             Camera camera,
             bool isOnline,
             DateTimeOffset changedAt,
-            ILogger logger)
+            ILogger logger,
+            CancellationToken cancellationToken = default)
         {
             if (!SendCameraStatusNotifications)
             {
@@ -152,7 +155,7 @@ namespace SynoAI.Notifiers.Telegram
                 }
 
                 return form;
-            }, logger);
+            }, logger, cancellationToken);
 
             logger.LogInformation(
                 "{cameraName}: Telegram camera {status} notification sent successfully",
@@ -160,7 +163,7 @@ namespace SynoAI.Notifiers.Telegram
                 isOnline ? "online" : "offline");
         }
 
-        private async Task SendRecordingClipAsync(Camera camera, ProcessedFile recordingClip, int? messageThreadId, ILogger logger)
+        private async Task SendRecordingClipAsync(Camera camera, ProcessedFile recordingClip, int? messageThreadId, ILogger logger, CancellationToken cancellationToken)
         {
             if (!SendRecordingClip || recordingClip == null)
             {
@@ -188,7 +191,7 @@ namespace SynoAI.Notifiers.Telegram
                 form.Add(videoContent, "video", recordingClip.FileName);
 
                 return form;
-            }, logger);
+            }, logger, cancellationToken);
         }
 
         private string GetTelegramMessage(Camera camera, Notification notification)
@@ -256,7 +259,7 @@ namespace SynoAI.Notifiers.Telegram
             return MessageThreadID;
         }
 
-        private async Task SendPhotoAsync(Camera camera, ProcessedImage processedImage, string message, int? messageThreadId, ILogger logger)
+        private async Task SendPhotoAsync(Camera camera, ProcessedImage processedImage, string message, int? messageThreadId, ILogger logger, CancellationToken cancellationToken)
         {
             string url = $"https://api.telegram.org/bot{Token}/sendPhoto";
             await PostTelegramFormAsync(url, () =>
@@ -293,27 +296,34 @@ namespace SynoAI.Notifiers.Telegram
                 }
 
                 return form;
-            }, logger);
+            }, logger, cancellationToken);
         }
 
-        private async Task PostTelegramFormAsync(string url, Func<MultipartFormDataContent> createForm, ILogger logger)
+        private async Task PostTelegramFormAsync(string url, Func<MultipartFormDataContent> createForm, ILogger logger, CancellationToken cancellationToken)
         {
             int maxAttempts = Config.HttpRetryCount + 1;
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
             {
+                await WaitForRetryWindowAsync(cancellationToken);
                 try
                 {
                     using MultipartFormDataContent form = createForm();
-                    using CancellationTokenSource cancellationTokenSource = new(TimeSpan.FromSeconds(Config.TelegramTimeoutSeconds));
+                    using CancellationTokenSource cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                    cancellationTokenSource.CancelAfter(TimeSpan.FromSeconds(Config.TelegramTimeoutSeconds));
                     using HttpResponseMessage response = await _httpClient.PostAsync(new Uri(url), form, cancellationTokenSource.Token);
-                    string responseContent = await response.Content.ReadAsStringAsync();
+                    string responseContent = await response.Content.ReadAsStringAsync(cancellationTokenSource.Token);
 
+                    TimeSpan? retryAfter = GetRetryAfter(responseContent);
+                    if (retryAfter.HasValue)
+                    {
+                        RememberRetryWindow(retryAfter.Value);
+                    }
                     if (!response.IsSuccessStatusCode)
                     {
                         logger.LogError("Telegram responded with HTTP status code '{statusCode}': {response}", response.StatusCode, responseContent);
                         if (ShouldRetry(response.StatusCode, attempt, maxAttempts))
                         {
-                            await DelayBeforeRetry(logger, attempt, maxAttempts);
+                            await DelayBeforeRetry(logger, attempt, maxAttempts, cancellationToken, retryAfter);
                             continue;
                         }
 
@@ -328,23 +338,23 @@ namespace SynoAI.Notifiers.Telegram
 
                     string description = responseJson?["description"]?.Value<string>() ?? "Unknown Telegram error";
                     logger.LogError("Telegram API returned an error: {description}", description);
-                    if (IsRetryableTelegramError(description) && attempt < maxAttempts)
+                    if ((retryAfter.HasValue || IsRetryableTelegramError(description)) && attempt < maxAttempts)
                     {
-                        await DelayBeforeRetry(logger, attempt, maxAttempts);
+                        await DelayBeforeRetry(logger, attempt, maxAttempts, cancellationToken, retryAfter);
                         continue;
                     }
 
                     throw new InvalidOperationException(description);
                 }
-                catch (TaskCanceledException ex) when (attempt < maxAttempts)
+                catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && attempt < maxAttempts)
                 {
                     logger.LogWarning(ex, "Telegram request timed out on attempt {attempt} of {maxAttempts}.", attempt, maxAttempts);
-                    await DelayBeforeRetry(logger, attempt, maxAttempts);
+                    await DelayBeforeRetry(logger, attempt, maxAttempts, cancellationToken);
                 }
-                catch (HttpRequestException ex) when (ex is not TelegramApiException && attempt < maxAttempts)
+                catch (HttpRequestException ex) when (ex is not TelegramApiException && !cancellationToken.IsCancellationRequested && attempt < maxAttempts)
                 {
                     logger.LogWarning(ex, "Telegram request failed on attempt {attempt} of {maxAttempts}.", attempt, maxAttempts);
-                    await DelayBeforeRetry(logger, attempt, maxAttempts);
+                    await DelayBeforeRetry(logger, attempt, maxAttempts, cancellationToken);
                 }
             }
         }
@@ -369,20 +379,64 @@ namespace SynoAI.Notifiers.Telegram
                    description.IndexOf("retry after", StringComparison.OrdinalIgnoreCase) >= 0;
         }
 
-        private static async Task DelayBeforeRetry(ILogger logger, int attempt, int maxAttempts)
+        internal static TimeSpan? GetRetryAfter(string responseContent)
         {
-            int delayMs = Config.HttpRetryDelayMs * attempt;
-            if (delayMs <= 0)
+            try
             {
-                return;
+                JObject response = JObject.Parse(responseContent);
+                JToken value = response["parameters"] is JObject parameters ? parameters["retry_after"] : null;
+                if (value?.Type == JTokenType.Integer &&
+                    int.TryParse(value.ToString(), NumberStyles.None, CultureInfo.InvariantCulture, out int seconds) && seconds >= 0)
+                {
+                    return TimeSpan.FromSeconds(seconds);
+                }
             }
+            catch (JsonException)
+            {
+                // Non-JSON error bodies still use the configured transient-error backoff.
+            }
+            return null;
+        }
 
+        private void RememberRetryWindow(TimeSpan delay)
+        {
+            long until = DateTime.UtcNow.Add(delay).Ticks;
+            long previous;
+            do
+            {
+                previous = Interlocked.Read(ref _retryNotBeforeTicks);
+                if (previous >= until) return;
+            } while (Interlocked.CompareExchange(ref _retryNotBeforeTicks, until, previous) != previous);
+        }
+
+        private async Task WaitForRetryWindowAsync(CancellationToken cancellationToken)
+        {
+            // Keep server backoff across calls, including when the last allowed attempt was rate-limited.
+            while (true)
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                TimeSpan remaining = TimeSpan.FromTicks(Interlocked.Read(ref _retryNotBeforeTicks) - DateTime.UtcNow.Ticks);
+                if (remaining <= TimeSpan.Zero) return;
+                await Task.Delay(remaining > TimeSpan.FromDays(1) ? TimeSpan.FromDays(1) : remaining, cancellationToken);
+            }
+        }
+
+        private static async Task DelayBeforeRetry(
+            ILogger logger, int attempt, int maxAttempts, CancellationToken cancellationToken,
+            TimeSpan? retryAfter = null)
+        {
+            TimeSpan delay = retryAfter ?? TimeSpan.FromMilliseconds((long)Config.HttpRetryDelayMs * attempt);
             logger.LogInformation(
                 "Retrying Telegram transient failure after {delayMs}ms ({nextAttempt}/{maxAttempts}).",
-                delayMs,
-                attempt + 1,
-                maxAttempts);
-            await Task.Delay(delayMs);
+                delay.TotalMilliseconds, attempt + 1, maxAttempts);
+            // Split unusually long server delays to stay within Task.Delay's supported range.
+            while (delay > TimeSpan.Zero)
+            {
+                TimeSpan part = delay > TimeSpan.FromDays(1) ? TimeSpan.FromDays(1) : delay;
+                await Task.Delay(part, cancellationToken);
+                delay -= part;
+            }
+            cancellationToken.ThrowIfCancellationRequested();
         }
     }
 }

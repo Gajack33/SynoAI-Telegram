@@ -65,8 +65,8 @@ namespace SynoAI.Services
                 var aiService = scope.ServiceProvider.GetRequiredService<IAIService>();
 
                 List<Task> initializationTasks = new List<Task>();
-                initializationTasks.Add(aiService.WarmupAsync());
-                initializationTasks.Add(synologyService.InitialiseAsync());
+                initializationTasks.Add(aiService.WarmupAsync(cancellationToken));
+                initializationTasks.Add(synologyService.InitialiseAsync(cancellationToken));
 
                 await Task.WhenAll(initializationTasks);
             }

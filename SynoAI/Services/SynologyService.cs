@@ -87,17 +87,17 @@ namespace SynoAI.Services
         /// <summary>
         /// Fetches all the end points, because they're dynamic between DSM versions.
         /// </summary>
-        public async Task<bool> GetEndPointsAsync()
+        public async Task<bool> GetEndPointsAsync(CancellationToken cancellationToken = default)
         {
             _logger.LogInformation("API: Querying end points");
 
             HttpClient httpClient = GetHttpClient();
             using HttpResponseMessage result = await SendWithTransientRetriesAsync(
-                () => httpClient.GetAsync(URI_INFO),
-                "query API endpoints");
+                () => httpClient.GetAsync(URI_INFO, cancellationToken),
+                "query API endpoints", cancellationToken: cancellationToken);
             if (result.IsSuccessStatusCode)
             {
-                SynologyResponse<SynologyApiInfoResponse> response = await GetResponse<SynologyApiInfoResponse>(result);
+                SynologyResponse<SynologyApiInfoResponse> response = await GetResponse<SynologyApiInfoResponse>(result, cancellationToken);
                 if (response.Success)
                 {
                     // Find the Authentication entry point
@@ -192,12 +192,12 @@ namespace SynoAI.Services
         /// Generates a login cookie for the username and password in the config.
         /// </summary>
         /// <returns>A cookie, or null on failure.</returns>
-        public async Task<Cookie> LoginAsync()
+        public async Task<Cookie> LoginAsync(CancellationToken cancellationToken = default)
         {
-            return await RefreshCookieAsync();
+            return await RefreshCookieAsync(cancellationToken);
         }
 
-        private async Task<Cookie> LoginCoreAsync()
+        private async Task<Cookie> LoginCoreAsync(CancellationToken cancellationToken)
         {
             _logger.LogInformation("Login: Authenticating");
 
@@ -206,11 +206,11 @@ namespace SynoAI.Services
 
             HttpClient httpClient = GetHttpClient();
             using HttpResponseMessage result = await SendWithTransientRetriesAsync(
-                () => httpClient.PostAsync(loginUri, CreateLoginContent()),
-                "login");
+                () => httpClient.PostAsync(loginUri, CreateLoginContent(), cancellationToken),
+                "login", cancellationToken: cancellationToken);
             if (result.IsSuccessStatusCode)
             {
-                SynologyResponse<SynologyLogin> response = await GetResponse<SynologyLogin>(result);
+                SynologyResponse<SynologyLogin> response = await GetResponse<SynologyLogin>(result, cancellationToken);
                 if (response.Success)
                 {
                     _logger.LogInformation("Login: Successful");
@@ -237,19 +237,19 @@ namespace SynoAI.Services
             return null;
         }
 
-        private async Task<Cookie> EnsureCookieAsync()
+        private async Task<Cookie> EnsureCookieAsync(CancellationToken cancellationToken)
         {
             if (Cookie != null)
             {
                 return Cookie;
             }
 
-            await _loginSemaphore.WaitAsync();
+            await _loginSemaphore.WaitAsync(cancellationToken);
             try
             {
                 if (Cookie == null)
                 {
-                    Cookie = await LoginCoreAsync();
+                    Cookie = await LoginCoreAsync(cancellationToken);
                 }
 
                 return Cookie;
@@ -260,12 +260,12 @@ namespace SynoAI.Services
             }
         }
 
-        private async Task<Cookie> RefreshCookieAsync()
+        private async Task<Cookie> RefreshCookieAsync(CancellationToken cancellationToken)
         {
-            await _loginSemaphore.WaitAsync();
+            await _loginSemaphore.WaitAsync(cancellationToken);
             try
             {
-                Cookie = await LoginCoreAsync();
+                Cookie = await LoginCoreAsync(cancellationToken);
                 return Cookie;
             }
             finally
@@ -278,17 +278,17 @@ namespace SynoAI.Services
         /// Fetches all of the required camera information from the API.
         /// </summary>
         /// <returns>A list of all cameras.</returns>
-        public async Task<IEnumerable<SynologyCamera>> GetCamerasAsync()
+        public async Task<IEnumerable<SynologyCamera>> GetCamerasAsync(CancellationToken cancellationToken = default)
         {
-            return await GetCamerasAsync(retryAfterLogin: true);
+            return await GetCamerasAsync(retryAfterLogin: true, cancellationToken);
         }
 
-        private async Task<IEnumerable<SynologyCamera>> GetCamerasAsync(bool retryAfterLogin)
+        private async Task<IEnumerable<SynologyCamera>> GetCamerasAsync(bool retryAfterLogin, CancellationToken cancellationToken)
         {
             _logger.LogDebug("GetCameras: Fetching Cameras");
 
             HttpClient client = GetHttpClient();
-            if (await EnsureCookieAsync() == null)
+            if (await EnsureCookieAsync(cancellationToken) == null)
             {
                 _logger.LogError("GetCameras: Cannot fetch cameras because Synology login failed.");
                 return null;
@@ -298,8 +298,8 @@ namespace SynoAI.Services
 
             string cameraInfoUri = string.Format(URI_CAMERA_INFO, _cameraPath, Config.ApiVersionCamera);
             using HttpResponseMessage result = await SendWithTransientRetriesAsync(
-                () => client.GetAsync(cameraInfoUri),
-                "get cameras");
+                () => client.GetAsync(cameraInfoUri, cancellationToken),
+                "get cameras", cancellationToken: cancellationToken);
 
             if (!result.IsSuccessStatusCode)
             {
@@ -307,7 +307,7 @@ namespace SynoAI.Services
                 return null;
             }
 
-            SynologyResponse<SynologyCameras> response = await GetResponse<SynologyCameras>(result);
+            SynologyResponse<SynologyCameras> response = await GetResponse<SynologyCameras>(result, cancellationToken);
             if (response?.Success == true)
             {
                 IEnumerable<SynologyCamera> cameras = response.Data?.Cameras ?? Enumerable.Empty<SynologyCamera>();
@@ -319,10 +319,10 @@ namespace SynoAI.Services
             if (retryAfterLogin && IsAuthenticationError(response))
             {
                 _logger.LogInformation("GetCameras: Synology session appears expired. Logging in again and retrying.");
-                Cookie = await RefreshCookieAsync();
+                Cookie = await RefreshCookieAsync(cancellationToken);
                 if (Cookie != null)
                 {
-                    return await GetCamerasAsync(retryAfterLogin: false);
+                    return await GetCamerasAsync(retryAfterLogin: false, cancellationToken);
                 }
             }
 
@@ -333,12 +333,37 @@ namespace SynoAI.Services
         /// Takes a snapshot of the specified camera.
         /// </summary>
         /// <returns>A string to the file path.</returns>
-        public async Task<byte[]> TakeSnapshotAsync(string cameraName)
+        public async Task<byte[]> TakeSnapshotAsync(string cameraName, CancellationToken cancellationToken = default)
         {
-            return await TakeSnapshotAsync(cameraName, retryAfterLogin: true);
+            using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(Config.SynologyTimeoutSeconds));
+            try
+            {
+                return await TakeSnapshotAsync(cameraName, retryAfterLogin: true, timeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning("{cameraName}: Snapshot operation timed out after {timeoutSeconds}s.", cameraName, Config.SynologyTimeoutSeconds);
+                return null;
+            }
         }
 
-        public async Task<ProcessedFile> DownloadLatestRecordingClipAsync(string cameraName, DateTimeOffset detectedAt, int offsetTimeMs, int playTimeMs)
+        public async Task<ProcessedFile> DownloadLatestRecordingClipAsync(string cameraName, DateTimeOffset detectedAt, int offsetTimeMs, int playTimeMs, CancellationToken cancellationToken = default)
+        {
+            using CancellationTokenSource timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(TimeSpan.FromSeconds(Config.SynologyTimeoutSeconds));
+            try
+            {
+                return await DownloadRecordingClipAsync(cameraName, detectedAt, offsetTimeMs, playTimeMs, timeout.Token);
+            }
+            catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+            {
+                _logger.LogWarning("{cameraName}: Recording clip operation timed out after {timeoutSeconds}s.", cameraName, Config.SynologyTimeoutSeconds);
+                return null;
+            }
+        }
+
+        private async Task<ProcessedFile> DownloadRecordingClipAsync(string cameraName, DateTimeOffset detectedAt, int offsetTimeMs, int playTimeMs, CancellationToken cancellationToken)
         {
             if (string.IsNullOrWhiteSpace(_recordingPath))
             {
@@ -354,7 +379,7 @@ namespace SynoAI.Services
 
             HttpClient client = GetHttpClient();
 
-            if (await EnsureCookieAsync() == null)
+            if (await EnsureCookieAsync(cancellationToken) == null)
             {
                 _logger.LogError($"{cameraName}: Cannot download recording clip because Synology login failed.");
                 return null;
@@ -372,7 +397,7 @@ namespace SynoAI.Services
                 client,
                 BuildRecordingListResource(_recordingPath, id, detectedAt),
                 cameraName,
-                "time-filtered");
+                "time-filtered", cancellationToken);
             LogRecordingCandidates(cameraName, "time-filtered", recordings, detectedAt);
             SynologyRecording recording = SelectRecordingForDetection(recordings, detectedAt);
             if (ShouldRetryWithRecentRecordingList(recordings, recording, detectedAt))
@@ -385,7 +410,7 @@ namespace SynoAI.Services
                     client,
                     BuildRecentRecordingListResource(_recordingPath, id),
                     cameraName,
-                    "latest");
+                    "latest", cancellationToken);
                 LogRecordingCandidates(cameraName, "latest", recentRecordings, detectedAt);
                 SynologyRecording recentRecording = SelectRecordingForDetection(recentRecordings, detectedAt);
                 if (recentRecording != null)
@@ -443,7 +468,7 @@ namespace SynoAI.Services
             string safeCameraName = CaptureFileStore.ToSafePathSegment(cameraName);
             string directory = Path.Combine(Constants.DIRECTORY_CAPTURES, safeCameraName);
             Directory.CreateDirectory(directory);
-            string filePath = Path.Combine(directory, $"{safeCameraName}_{DateTime.Now:yyyy_MM_dd_HH_mm_ss_FFF}_clip.mp4");
+            string filePath = Path.Combine(directory, $"{safeCameraName}_{DateTime.Now:yyyy_MM_dd_HH_mm_ss_FFF}_{Guid.NewGuid():N}_clip.mp4");
 
             string sourceFileName = string.IsNullOrWhiteSpace(recording.FilePath)
                 ? $"{recording.Id}.mp4"
@@ -451,9 +476,9 @@ namespace SynoAI.Services
             string fileName = Uri.EscapeDataString(sourceFileName);
             string downloadResource = string.Format(URI_RECORDING_DOWNLOAD, _recordingPath, fileName, recording.Id, downloadOffsetTimeMs, downloadPlayTimeMs);
             using HttpResponseMessage downloadResponse = await SendWithTransientRetriesAsync(
-                () => client.GetAsync(downloadResource, HttpCompletionOption.ResponseHeadersRead),
+                () => client.GetAsync(downloadResource, HttpCompletionOption.ResponseHeadersRead, cancellationToken),
                 "download recording clip",
-                cameraName);
+                cameraName, cancellationToken);
             if (!downloadResponse.IsSuccessStatusCode)
             {
                 _logger.LogError($"{cameraName}: Failed to download recording clip with HTTP status code '{downloadResponse.StatusCode}'");
@@ -470,30 +495,41 @@ namespace SynoAI.Services
                 return null;
             }
 
-            using Stream input = await downloadResponse.Content.ReadAsStreamAsync();
-            using FileStream output = File.Create(filePath);
-            bool copied = await CopyToFileWithLimitAsync(input, output, Config.MaxRecordingClipBytes);
-            if (!copied)
+            bool complete = false;
+            bool fileCreated = false;
+            try
             {
-                _logger.LogWarning($"{cameraName}: Downloaded recording clip exceeded the configured size limit.");
-                output.Dispose();
-                File.Delete(filePath);
-                return null;
-            }
+                using Stream input = await downloadResponse.Content.ReadAsStreamAsync(cancellationToken);
+                await using (FileStream output = new(filePath, FileMode.CreateNew, FileAccess.Write, FileShare.None, 81920, useAsync: true))
+                {
+                    fileCreated = true;
+                    bool copied = await CopyToFileWithLimitAsync(input, output, Config.MaxRecordingClipBytes, cancellationToken);
+                    if (!copied || output.Length == 0)
+                    {
+                        _logger.LogWarning("{cameraName}: Recording clip was empty or exceeded the configured size limit.", cameraName);
+                        return null;
+                    }
 
-            await output.FlushAsync();
-            output.Dispose();
-            FileInfo file = new(filePath);
-            if (file.Length == 0)
+                    await output.FlushAsync(cancellationToken);
+                    _logger.LogInformation("{cameraName}: Downloaded recording clip ({length} bytes).", cameraName, output.Length);
+                }
+                complete = true;
+                return new ProcessedFile(filePath);
+            }
+            finally
             {
-                _logger.LogWarning($"{cameraName}: Downloaded recording clip was empty.");
-                File.Delete(filePath);
-                return null;
+                if (fileCreated && !complete)
+                {
+                    try
+                    {
+                        File.Delete(filePath);
+                    }
+                    catch (Exception ex) when (ex is IOException || ex is UnauthorizedAccessException)
+                    {
+                        _logger.LogWarning(ex, "{cameraName}: Could not remove the partial recording clip.", cameraName);
+                    }
+                }
             }
-
-            _logger.LogInformation($"{cameraName}: Downloaded recording clip '{filePath}' ({file.Length} bytes).");
-            return new ProcessedFile(filePath);
-
         }
 
         internal static string BuildRecordingListResource(string recordingPath, int cameraId, DateTimeOffset detectedAt)
@@ -775,12 +811,12 @@ namespace SynoAI.Services
             HttpClient client,
             string listResource,
             string cameraName,
-            string lookupDescription)
+            string lookupDescription, CancellationToken cancellationToken)
         {
             using HttpResponseMessage listResponse = await SendWithTransientRetriesAsync(
-                () => client.GetAsync(listResource),
+                () => client.GetAsync(listResource, cancellationToken),
                 $"list {lookupDescription} recordings",
-                cameraName);
+                cameraName, cancellationToken);
             if (!listResponse.IsSuccessStatusCode)
             {
                 _logger.LogWarning(
@@ -791,7 +827,7 @@ namespace SynoAI.Services
                 return null;
             }
 
-            SynologyResponse<SynologyRecordings> recordingsResponse = await GetResponse<SynologyRecordings>(listResponse);
+            SynologyResponse<SynologyRecordings> recordingsResponse = await GetResponse<SynologyRecordings>(listResponse, cancellationToken);
             if (!recordingsResponse.Success)
             {
                 _logger.LogWarning(
@@ -840,11 +876,11 @@ namespace SynoAI.Services
                 : "(unknown)";
         }
 
-        private async Task<byte[]> TakeSnapshotAsync(string cameraName, bool retryAfterLogin)
+        private async Task<byte[]> TakeSnapshotAsync(string cameraName, bool retryAfterLogin, CancellationToken cancellationToken)
         {
             HttpClient client = GetHttpClient();
 
-            if (await EnsureCookieAsync() == null)
+            if (await EnsureCookieAsync(cancellationToken) == null)
             {
                 _logger.LogError($"{cameraName}: Cannot take snapshot because Synology login failed.");
                 return null;
@@ -863,9 +899,9 @@ namespace SynoAI.Services
                 try
                 {
                     using (HttpResponseMessage response = await SendWithTransientRetriesAsync(
-                        () => client.GetAsync(resource, HttpCompletionOption.ResponseHeadersRead),
+                        () => client.GetAsync(resource, HttpCompletionOption.ResponseHeadersRead, cancellationToken),
                         "take snapshot",
-                        cameraName))
+                        cameraName, cancellationToken))
                     {
                         if (!response.IsSuccessStatusCode)
                         {
@@ -877,12 +913,12 @@ namespace SynoAI.Services
                         {
                             // Only return the bytes when we have a valid image back
                             _logger.LogDebug($"{cameraName}: Reading snapshot");
-                            return await ReadSnapshotWithLimitAsync(response.Content, cameraName);
+                            return await ReadSnapshotWithLimitAsync(response.Content, cameraName, cancellationToken);
                         }
                         else
                         {
                             // We didn't get an image type back, so this must have errored
-                            SynologyResponse errorResponse = await GetErrorResponse(response);
+                            SynologyResponse errorResponse = await GetErrorResponse(response, cancellationToken);
                             if (errorResponse.Success)
                             {
                                 // This should never happen, but let's add logging just in case
@@ -894,17 +930,17 @@ namespace SynoAI.Services
                                 if (retryAfterLogin && IsAuthenticationError(errorResponse))
                                 {
                                     _logger.LogInformation($"{cameraName}: Synology session appears expired. Logging in again and retrying snapshot.");
-                                    Cookie = await RefreshCookieAsync();
+                                    Cookie = await RefreshCookieAsync(cancellationToken);
                                     if (Cookie != null)
                                     {
-                                        return await TakeSnapshotAsync(cameraName, retryAfterLogin: false);
+                                        return await TakeSnapshotAsync(cameraName, retryAfterLogin: false, cancellationToken);
                                     }
                                 }
                             }
                         }
                     }
                 }
-                catch (TaskCanceledException ex)
+                catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
                 {
                     _logger.LogError(ex, $"{cameraName}: Snapshot request timed out after {Config.SynologyTimeoutSeconds} seconds.");
                 }
@@ -971,11 +1007,11 @@ namespace SynoAI.Services
             return true;
         }
 
-        private async Task<byte[]> ReadSnapshotWithLimitAsync(HttpContent content, string cameraName)
+        private async Task<byte[]> ReadSnapshotWithLimitAsync(HttpContent content, string cameraName, CancellationToken cancellationToken)
         {
             if (Config.MaxSnapshotBytes <= 0)
             {
-                return await content.ReadAsByteArrayAsync();
+                return await content.ReadAsByteArrayAsync(cancellationToken);
             }
 
             if (content.Headers.ContentLength.HasValue && content.Headers.ContentLength.Value > Config.MaxSnapshotBytes)
@@ -988,13 +1024,13 @@ namespace SynoAI.Services
                 return null;
             }
 
-            using Stream input = await content.ReadAsStreamAsync();
+            using Stream input = await content.ReadAsStreamAsync(cancellationToken);
             using MemoryStream output = new();
             byte[] buffer = new byte[81920];
             int read;
             long totalRead = 0;
 
-            while ((read = await input.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            while ((read = await input.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
             {
                 totalRead += read;
                 if (totalRead > Config.MaxSnapshotBytes)
@@ -1012,13 +1048,13 @@ namespace SynoAI.Services
             return output.ToArray();
         }
 
-        private static async Task<bool> CopyToFileWithLimitAsync(Stream input, Stream output, int maxBytes)
+        private static async Task<bool> CopyToFileWithLimitAsync(Stream input, Stream output, int maxBytes, CancellationToken cancellationToken)
         {
             byte[] buffer = new byte[81920];
             int read;
             long totalRead = 0;
 
-            while ((read = await input.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            while ((read = await input.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
             {
                 totalRead += read;
                 if (maxBytes > 0 && totalRead > maxBytes)
@@ -1026,7 +1062,7 @@ namespace SynoAI.Services
                     return false;
                 }
 
-                await output.WriteAsync(buffer, 0, read);
+                await output.WriteAsync(buffer, 0, read, cancellationToken);
             }
 
             return true;
@@ -1038,9 +1074,9 @@ namespace SynoAI.Services
         /// <typeparam name="T">The type of the return 'data'.</typeparam>
         /// <param name="message">The message to parse.</param>
         /// <returns>A Synology response object.</returns>
-        private async Task<SynologyResponse<T>> GetResponse<T>(HttpResponseMessage message)
+        private async Task<SynologyResponse<T>> GetResponse<T>(HttpResponseMessage message, CancellationToken cancellationToken)
         {
-            string content = await message.Content.ReadAsStringAsync();
+            string content = await message.Content.ReadAsStringAsync(cancellationToken);
             return JsonConvert.DeserializeObject<SynologyResponse<T>>(content);
         }
 
@@ -1049,16 +1085,16 @@ namespace SynoAI.Services
         /// </summary>
         /// <param name="message">The message to parse.</param>
         /// <returns>A Synology response object.</returns>
-        private async Task<SynologyResponse> GetErrorResponse(HttpResponseMessage message)
+        private async Task<SynologyResponse> GetErrorResponse(HttpResponseMessage message, CancellationToken cancellationToken)
         {
-            string content = await message.Content.ReadAsStringAsync();
+            string content = await message.Content.ReadAsStringAsync(cancellationToken);
             return JsonConvert.DeserializeObject<SynologyResponse>(content);
         }
 
         private async Task<HttpResponseMessage> SendWithTransientRetriesAsync(
             Func<Task<HttpResponseMessage>> sendAsync,
             string operation,
-            string cameraName = null)
+            string cameraName = null, CancellationToken cancellationToken = default)
         {
             int maxAttempts = Config.HttpRetryCount + 1;
             for (int attempt = 1; attempt <= maxAttempts; attempt++)
@@ -1076,13 +1112,13 @@ namespace SynoAI.Services
                             attempt,
                             maxAttempts);
                         response.Dispose();
-                        await DelayBeforeRetry(operation, cameraName, attempt, maxAttempts);
+                        await DelayBeforeRetry(operation, cameraName, attempt, maxAttempts, cancellationToken);
                         continue;
                     }
 
                     return response;
                 }
-                catch (TaskCanceledException ex) when (attempt < maxAttempts)
+                catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && attempt < maxAttempts)
                 {
                     _logger.LogWarning(
                         ex,
@@ -1091,9 +1127,9 @@ namespace SynoAI.Services
                         operation,
                         attempt,
                         maxAttempts);
-                    await DelayBeforeRetry(operation, cameraName, attempt, maxAttempts);
+                    await DelayBeforeRetry(operation, cameraName, attempt, maxAttempts, cancellationToken);
                 }
-                catch (HttpRequestException ex) when (attempt < maxAttempts)
+                catch (HttpRequestException ex) when (!cancellationToken.IsCancellationRequested && attempt < maxAttempts)
                 {
                     _logger.LogWarning(
                         ex,
@@ -1102,7 +1138,7 @@ namespace SynoAI.Services
                         operation,
                         attempt,
                         maxAttempts);
-                    await DelayBeforeRetry(operation, cameraName, attempt, maxAttempts);
+                    await DelayBeforeRetry(operation, cameraName, attempt, maxAttempts, cancellationToken);
                 }
             }
 
@@ -1115,7 +1151,7 @@ namespace SynoAI.Services
             return attempt < maxAttempts && (status == 408 || status == 429 || status >= 500);
         }
 
-        private async Task DelayBeforeRetry(string operation, string cameraName, int attempt, int maxAttempts)
+        private async Task DelayBeforeRetry(string operation, string cameraName, int attempt, int maxAttempts, CancellationToken cancellationToken)
         {
             int delayMs = Config.HttpRetryDelayMs * attempt;
             if (delayMs <= 0)
@@ -1130,7 +1166,7 @@ namespace SynoAI.Services
                 delayMs,
                 attempt + 1,
                 maxAttempts);
-            await Task.Delay(delayMs);
+            await Task.Delay(delayMs, cancellationToken);
         }
 
         private static string FormatCameraPrefix(string cameraName)
@@ -1138,21 +1174,22 @@ namespace SynoAI.Services
             return string.IsNullOrWhiteSpace(cameraName) ? string.Empty : $"{cameraName}: ";
         }
 
-        public async Task InitialiseAsync()
+        public async Task InitialiseAsync(CancellationToken cancellationToken = default)
         {
             _logger.LogInformation("Initialising");
 
             // Get the actual end points, because they're not guaranteed to be the same on all installations and DSM versions
             try
             {
-                bool retrievedEndPoints = await GetEndPointsAsync();
+                bool retrievedEndPoints = await GetEndPointsAsync(cancellationToken);
                 if (!retrievedEndPoints)
                 {
                     _applicationLifetime.StopApplication();
+                    return;
                 }
 
                 // Perform a login first as all actions need a valid cookie
-                Cookie = await LoginAsync();
+                Cookie = await LoginAsync(cancellationToken);
                 if (Cookie == null)
                 {
                     // The login failed, so kill the application
@@ -1177,7 +1214,7 @@ namespace SynoAI.Services
                 }
 
                 // Fetch all the cameras and store a Name to ID dictionary for quick lookup
-                IEnumerable<SynologyCamera> synologyCameras = await GetCamerasAsync();
+                IEnumerable<SynologyCamera> synologyCameras = await GetCamerasAsync(cancellationToken);
                 if (synologyCameras == null)
                 {
                     // We failed to fetch the cameras, so kill the application
@@ -1202,6 +1239,10 @@ namespace SynoAI.Services
                 }
 
                 _logger.LogInformation("Initialisation successful.");
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
             }
             catch (Exception ex)
             {

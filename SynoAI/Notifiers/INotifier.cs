@@ -1,3 +1,4 @@
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using SynoAI.Models;
 using System.Collections.Generic;
@@ -18,6 +19,6 @@ namespace SynoAI.Notifiers
         /// <summary>
         /// Handles the send of the notification.
         /// </summary>
-        Task SendAsync(Camera camera, Notification notification, ILogger logger);
+        Task SendAsync(Camera camera, Notification notification, ILogger logger, CancellationToken cancellationToken = default);
     }
 }

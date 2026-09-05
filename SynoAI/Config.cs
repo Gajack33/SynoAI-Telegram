@@ -287,6 +287,8 @@ namespace SynoAI
         /// Maximum accepted Synology recording clip size in bytes. 0 disables the limit.
         /// </summary>
         public static int MaxRecordingClipBytes { get; private set; }
+
+        public static int MaxConcurrentRecordingClips { get; private set; }
         /// <summary>
         /// Generates the configuration from the provided IConfiguration.
         /// </summary>
@@ -365,6 +367,7 @@ namespace SynoAI
             MaxSnapshotBytes = Math.Max(0, configuration.GetValue<int>("MaxSnapshotBytes", 10 * 1024 * 1024));
             MaxAIResponseBytes = Math.Max(0, configuration.GetValue<int>("MaxAIResponseBytes", 1024 * 1024));
             MaxRecordingClipBytes = Math.Max(0, configuration.GetValue<int>("MaxRecordingClipBytes", 50 * 1024 * 1024));
+            MaxConcurrentRecordingClips = Math.Clamp(configuration.GetValue<int>("MaxConcurrentRecordingClips", 2), 1, 8);
 
             IConfigurationSection aiSection = configuration.GetSection("AI");
             AI = aiSection.GetValue<AIType>("Type", AIType.DeepStack);
@@ -465,6 +468,21 @@ namespace SynoAI
                 if (camera.MaxSnapshots.HasValue && camera.MaxSnapshots.Value < 1)
                 {
                     errors.Add($"Camera '{camera.Name}' MaxSnapshots must be one or greater.");
+                }
+
+                if (camera.GetDelay() < 0 || camera.GetDelayAfterSuccess() < 0)
+                {
+                    errors.Add($"Camera '{camera.Name}' effective Delay and DelayAfterSuccess must be zero or greater.");
+                }
+
+                if (camera.GetMinSizeX() < 0 || camera.GetMinSizeY() < 0 || camera.GetMaxSizeX() < 0 || camera.GetMaxSizeY() < 0)
+                {
+                    errors.Add($"Camera '{camera.Name}' effective object sizes must be zero or greater.");
+                }
+
+                if (camera.GetMinSizeX() > camera.GetMaxSizeX() || camera.GetMinSizeY() > camera.GetMaxSizeY())
+                {
+                    errors.Add($"Camera '{camera.Name}' effective minimum object sizes cannot exceed maximum sizes.");
                 }
             }
 

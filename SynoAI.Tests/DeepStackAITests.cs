@@ -8,6 +8,7 @@ using SynoAI.Models;
 using System;
 using System.Collections.Generic;
 using System.Globalization;
+using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Http;
@@ -116,6 +117,67 @@ namespace SynoAI.Tests
             Assert.That(httpClient.RequestUri.AbsolutePath, Is.EqualTo("/v1/vision/face/recognize"));
             Assert.That(prediction.Label, Is.EqualTo("Pierre"));
             Assert.That(prediction.Confidence, Is.EqualTo(96));
+        }
+
+        [Test]
+        public async Task Process_StopsReadingOversizedStreamingResponseBeforeBufferingItAll()
+        {
+            ConfigureCodeProjectAI(new Dictionary<string, string> { ["MaxAIResponseBytes"] = "1024" });
+            using ControlledReadStream body = new(1024 * 1024);
+            using TestHttpHandler handler = new(_ => new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StreamContent(body)
+            });
+            HttpClientWrapper client = new(new TestHttpClientFactory(handler));
+
+            var result = await new DeepStackAI(client).Process(CreateLogger(), CreateCamera(50), new byte[] { 1 });
+
+            Assert.That(result, Is.Null);
+            Assert.That(body.BytesRead, Is.LessThanOrEqualTo(81920));
+            Assert.That(body.BytesRead, Is.GreaterThan(1024));
+        }
+
+        [Test]
+        public async Task Process_TimesOutWhileReadingResponseBody()
+        {
+            ConfigureCodeProjectAI(new Dictionary<string, string>
+            {
+                ["AI:TimeoutSeconds"] = "1", ["HttpRetryCount"] = "0"
+            });
+            using ControlledReadStream body = new(stallAtEnd: true);
+            using TestHttpHandler handler = new(_ => new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(body) });
+            HttpClientWrapper client = new(new TestHttpClientFactory(handler));
+            Task<IEnumerable<AIPrediction>> request = new DeepStackAI(client).Process(CreateLogger(), CreateCamera(50), new byte[] { 1 });
+            try
+            {
+                Assert.That(await request.WaitAsync(TimeSpan.FromSeconds(3)), Is.Null);
+                Assert.That(body.WasCancelled, Is.True);
+            }
+            finally { body.Release.TrySetResult(0); }
+        }
+
+        [Test]
+        public async Task Process_CallerCancellationStopsBodyReadWithoutRetrying()
+        {
+            ConfigureCodeProjectAI(new Dictionary<string, string> { ["HttpRetryCount"] = "3" });
+            using ControlledReadStream body = new(stallAtEnd: true);
+            int calls = 0;
+            using TestHttpHandler handler = new(_ =>
+            {
+                calls++;
+                return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StreamContent(body) };
+            });
+            HttpClientWrapper client = new(new TestHttpClientFactory(handler));
+            using CancellationTokenSource stop = new();
+            var request = new DeepStackAI(client).Process(CreateLogger(), CreateCamera(50), new byte[] { 1 }, stop.Token);
+            try
+            {
+                await body.Reading.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                stop.Cancel();
+                Assert.That(async () => await request, Throws.InstanceOf<OperationCanceledException>());
+                Assert.That(calls, Is.EqualTo(1));
+            }
+            finally { body.Release.TrySetResult(0); }
         }
 
         private static Camera CreateCamera(decimal threshold)

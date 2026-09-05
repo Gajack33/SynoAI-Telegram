@@ -1,3 +1,4 @@
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using SynoAI.Models;
 using System.Threading.Tasks;
@@ -13,6 +14,6 @@ namespace SynoAI.Notifiers
         /// </summary>
         int RecordingClipOffsetMs { get; }
         int RecordingClipDurationMs { get; }
-        Task SendRecordingClipAsync(Camera camera, Notification notification, ILogger logger);
+        Task SendRecordingClipAsync(Camera camera, Notification notification, ILogger logger, CancellationToken cancellationToken = default);
     }
 }

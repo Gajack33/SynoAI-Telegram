@@ -5,6 +5,7 @@ namespace SynoAI.Services
 {
     public interface ICameraProcessingQueue
     {
+        int PendingCount { get; }
         CameraEnqueueResult TryEnqueue(string cameraName);
         void SetCameraEnabled(string cameraName, bool enabled);
         void AddCameraDelay(string cameraName, int delayMs);

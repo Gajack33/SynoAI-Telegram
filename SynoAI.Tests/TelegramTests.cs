@@ -380,6 +380,72 @@ namespace SynoAI.Tests
             Assert.That(telegram.RecordingClipDurationMs, Is.EqualTo(120000));
         }
 
+        [Test]
+        public async Task SendCameraStatusAsync_WaitsForTelegramRetryAfter()
+        {
+            Configure(httpRetryCount: 1, httpRetryDelayMs: 0);
+            FakeHttpClient httpClient = new(
+                new HttpResponseMessage((HttpStatusCode)429)
+                {
+                    Content = new StringContent(@"{""ok"":false,""parameters"":{""retry_after"":1}}")
+                },
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(@"{""ok"":true}") });
+            Telegram telegram = new(httpClient) { ChatID = "1", Token = "token" };
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            await telegram.SendCameraStatusAsync(new Camera { Name = "Entree" }, false, DateTimeOffset.UtcNow, NullLogger.Instance);
+            Assert.That(httpClient.RequestCount, Is.EqualTo(2));
+            Assert.That(elapsed.Elapsed, Is.GreaterThanOrEqualTo(TimeSpan.FromMilliseconds(950)));
+        }
+
+        [Test]
+        public async Task SendCameraStatusAsync_CancellationInterruptsServerBackoff()
+        {
+            Configure(httpRetryCount: 1, httpRetryDelayMs: 0);
+            FakeHttpClient httpClient = new(new HttpResponseMessage((HttpStatusCode)429)
+            {
+                Content = new StringContent(@"{""ok"":false,""parameters"":{""retry_after"":30}}")
+            });
+            Telegram telegram = new(httpClient) { ChatID = "1", Token = "token" };
+            using CancellationTokenSource stop = new();
+            Task send = telegram.SendCameraStatusAsync(new Camera { Name = "Entree" }, false,
+                DateTimeOffset.UtcNow, NullLogger.Instance, stop.Token);
+            await Task.Delay(50);
+            stop.Cancel();
+            Assert.That(async () => await send.WaitAsync(TimeSpan.FromSeconds(3)), Throws.InstanceOf<OperationCanceledException>());
+            Assert.That(httpClient.RequestCount, Is.EqualTo(1));
+        }
+
+        [Test]
+        public async Task SendCameraStatusAsync_RemembersServerBackoffAfterRetryBudgetIsExhausted()
+        {
+            Configure(httpRetryCount: 0, httpRetryDelayMs: 0);
+            FakeHttpClient client = new(
+                new HttpResponseMessage((HttpStatusCode)429) { Content = new StringContent(@"{""ok"":false,""parameters"":{""retry_after"":1}}") },
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(@"{""ok"":true}") });
+            Telegram telegram = new(client) { Token = "token", ChatID = "1" };
+            Camera camera = new() { Name = "Entree" };
+            Assert.That(async () => await telegram.SendCameraStatusAsync(camera, false, DateTimeOffset.UtcNow, NullLogger.Instance),
+                Throws.InstanceOf<HttpRequestException>());
+            var elapsed = System.Diagnostics.Stopwatch.StartNew();
+            await telegram.SendCameraStatusAsync(camera, false, DateTimeOffset.UtcNow, NullLogger.Instance);
+            Assert.That(client.RequestCount, Is.EqualTo(2));
+            Assert.That(elapsed.ElapsedMilliseconds, Is.GreaterThanOrEqualTo(900));
+        }
+
+        [TestCase("not json")]
+        [TestCase(@"{""parameters"":""unexpected""}")]
+        [TestCase(@"{""parameters"":[]}")]
+        public async Task SendCameraStatusAsync_MalformedRetryMetadataKeepsTransientRetry(string errorBody)
+        {
+            Configure(httpRetryCount: 1, httpRetryDelayMs: 0);
+            FakeHttpClient client = new(
+                new HttpResponseMessage(HttpStatusCode.ServiceUnavailable) { Content = new StringContent(errorBody) },
+                new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(@"{""ok"":true}") });
+            Telegram telegram = new(client) { Token = "token", ChatID = "1" };
+            await telegram.SendCameraStatusAsync(new Camera { Name = "Entree" }, false, DateTimeOffset.UtcNow, NullLogger.Instance);
+            Assert.That(client.RequestCount, Is.EqualTo(2));
+        }
+
         private static void Configure(string accessToken = null, string imageAccessToken = null, int? httpRetryCount = null, int? httpRetryDelayMs = null)
         {
             Dictionary<string, string> values = new()

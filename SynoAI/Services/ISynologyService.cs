@@ -1,3 +1,4 @@
+using System.Threading;
 using SynoAI.Models;
 using System;
 using System.Collections.Generic;
@@ -8,10 +9,10 @@ namespace SynoAI.Services
 {
     public interface ISynologyService
     {
-        Task InitialiseAsync();
-        Task<Cookie> LoginAsync();
-        Task<IEnumerable<SynologyCamera>> GetCamerasAsync();
-        Task<byte[]> TakeSnapshotAsync(string cameraName);
-        Task<ProcessedFile> DownloadLatestRecordingClipAsync(string cameraName, DateTimeOffset detectedAt, int offsetTimeMs, int playTimeMs);
+        Task InitialiseAsync(CancellationToken cancellationToken = default);
+        Task<Cookie> LoginAsync(CancellationToken cancellationToken = default);
+        Task<IEnumerable<SynologyCamera>> GetCamerasAsync(CancellationToken cancellationToken = default);
+        Task<byte[]> TakeSnapshotAsync(string cameraName, CancellationToken cancellationToken = default);
+        Task<ProcessedFile> DownloadLatestRecordingClipAsync(string cameraName, DateTimeOffset detectedAt, int offsetTimeMs, int playTimeMs, CancellationToken cancellationToken = default);
     }
 }

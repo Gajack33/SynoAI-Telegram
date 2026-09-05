@@ -1,4 +1,5 @@
-﻿using Microsoft.Extensions.Logging;
+using System.Threading;
+using Microsoft.Extensions.Logging;
 using SynoAI.AIs;
 using SynoAI.AIs.DeepStack;
 using SynoAI.Models;
@@ -22,11 +23,11 @@ namespace SynoAI.Services
             _httpClient = httpClient;
         }
 
-        public async Task<IEnumerable<AIPrediction>> ProcessAsync(Camera camera, byte[] image)
+        public async Task<IEnumerable<AIPrediction>> ProcessAsync(Camera camera, byte[] image, CancellationToken cancellationToken = default)
         {
             AI ai = GetAI();
             byte[] aiImage = PrepareImageForAI(camera, image, out double scaleX, out double scaleY);
-            IEnumerable<AIPrediction> predictions = await ai.Process(_logger, camera, aiImage);
+            IEnumerable<AIPrediction> predictions = await ai.Process(_logger, camera, aiImage, cancellationToken);
 
             if (predictions == null || (scaleX == 1 && scaleY == 1))
             {
@@ -44,7 +45,7 @@ namespace SynoAI.Services
             }).ToList();
         }
 
-        public async Task<bool> WarmupAsync()
+        public async Task<bool> WarmupAsync(CancellationToken cancellationToken = default)
         {
             if (!Config.AIWarmupEnabled)
             {
@@ -65,9 +66,9 @@ namespace SynoAI.Services
                 IEnumerable<AIPrediction> predictions = null;
                 try
                 {
-                    predictions = await ProcessAsync(camera, image);
+                    predictions = await ProcessAsync(camera, image, cancellationToken);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
                 {
                     _logger.LogWarning(ex, "AI warmup attempt {attempt} failed unexpectedly.", attempt);
                 }
@@ -80,7 +81,7 @@ namespace SynoAI.Services
 
                 if (attempt < Config.AIWarmupRetries && Config.AIWarmupDelayMs > 0)
                 {
-                    await Task.Delay(Config.AIWarmupDelayMs);
+                    await Task.Delay(Config.AIWarmupDelayMs, cancellationToken);
                 }
             }
 

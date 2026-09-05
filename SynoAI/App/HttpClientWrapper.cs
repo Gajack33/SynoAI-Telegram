@@ -38,17 +38,18 @@ namespace SynoAI.App
 
         public Task<HttpResponseMessage> PostAsync(string requestUri, HttpContent content)
         {
-            return CreateClient().PostAsync(requestUri, content);
+            return PostAsync(new Uri(requestUri), content, CancellationToken.None);
         }
 
         public Task<HttpResponseMessage> PostAsync(Uri requestUri, HttpContent content)
         {
-            return CreateClient().PostAsync(requestUri, content);
+            return PostAsync(requestUri, content, CancellationToken.None);
         }
 
-        public Task<HttpResponseMessage> PostAsync(Uri requestUri, HttpContent content, CancellationToken cancellationToken)
+        public async Task<HttpResponseMessage> PostAsync(Uri requestUri, HttpContent content, CancellationToken cancellationToken)
         {
-            return CreateClient().PostAsync(requestUri, content, cancellationToken);
+            using HttpRequestMessage request = new(HttpMethod.Post, requestUri) { Content = content };
+            return await CreateClient().SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cancellationToken);
         }
 
         private HttpClient CreateClient()

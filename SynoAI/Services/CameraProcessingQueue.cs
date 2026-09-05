@@ -22,11 +22,14 @@ namespace SynoAI.Services
         private readonly ConcurrentDictionary<string, DateTime> _delayedCameraChecks = new(StringComparer.OrdinalIgnoreCase);
         private readonly ConcurrentDictionary<string, bool> _enabledCameras = new(StringComparer.OrdinalIgnoreCase);
         private readonly ILogger<CameraProcessingQueue> _logger;
+        private int _pendingCount;
 
         public CameraProcessingQueue(ILogger<CameraProcessingQueue> logger)
         {
             _logger = logger;
         }
+
+        public int PendingCount => Volatile.Read(ref _pendingCount);
 
         public CameraEnqueueResult TryEnqueue(string cameraName)
         {
@@ -67,8 +70,10 @@ namespace SynoAI.Services
                 return new CameraEnqueueResult(CameraEnqueueStatus.CameraAlreadyProcessing);
             }
 
+            Interlocked.Increment(ref _pendingCount);
             if (!_queue.Writer.TryWrite(new CameraTriggerWorkItem(camera.Name)))
             {
+                Interlocked.Decrement(ref _pendingCount);
                 _runningCameraChecks.TryRemove(cameraName, out _);
                 _logger.LogError("{cameraName}: Failed to enqueue camera trigger.", cameraName);
                 return new CameraEnqueueResult(CameraEnqueueStatus.QueueUnavailable);
@@ -100,9 +105,11 @@ namespace SynoAI.Services
             _runningCameraChecks.TryRemove(cameraName, out _);
         }
 
-        public ValueTask<CameraTriggerWorkItem> ReadAsync(CancellationToken cancellationToken)
+        public async ValueTask<CameraTriggerWorkItem> ReadAsync(CancellationToken cancellationToken)
         {
-            return _queue.Reader.ReadAsync(cancellationToken);
+            CameraTriggerWorkItem item = await _queue.Reader.ReadAsync(cancellationToken);
+            Interlocked.Decrement(ref _pendingCount);
+            return item;
         }
     }
 }

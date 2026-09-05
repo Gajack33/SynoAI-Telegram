@@ -1,3 +1,4 @@
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using SynoAI.Models;
 using System.Collections.Generic;
@@ -7,6 +8,6 @@ namespace SynoAI.AIs
 {
     public abstract class AI
     {
-        public abstract Task<IEnumerable<AIPrediction>> Process(ILogger logger, Camera camera, byte[] image);
+        public abstract Task<IEnumerable<AIPrediction>> Process(ILogger logger, Camera camera, byte[] image, CancellationToken cancellationToken = default);
     }
 }

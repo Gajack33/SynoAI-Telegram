@@ -98,7 +98,10 @@ a message when a configured camera becomes unavailable and another when it
 returns to the normal state. These messages use the camera-specific forum topic
 from `CameraMessageThreadIDs` when configured. SynoAI-Telegram does not send an
 online message during a healthy startup, but it does report a camera that is
-already offline after the configured confirmation count.
+already offline after the configured confirmation count. If a destination fails,
+its latest pending transition is retried on later polls without resending to
+successful destinations. A newly confirmed state replaces an obsolete alert;
+these pending deliveries are kept in memory until delivery or application restart.
 
 Set `SendRecordingClip` to `true` only after photo notifications are working.
 `RecordingClipOffsetMs` is applied relative to the snapshot where SynoAI detected
@@ -115,12 +118,37 @@ downloaded while Surveillance Station is still writing the recording. Increase
 before it downloads and sends the video. For one camera, setting it close to
 `RecordingClipDurationMs` gives Surveillance Station time to make the requested
 duration available. This wait and the subsequent video transfer run in the
-background and do not keep the camera detection queue busy.
+background and do not keep the camera detection queue busy. `MaxConcurrentRecordingClips`
+limits concurrent video jobs (default `2`, allowed range `1..8`); another 32 clips
+can wait. A clip waiting for its recording to grow does not occupy a transfer
+slot. If the waiting queue is full, the new clip is skipped and the photo remains
+sent.
+
+`SynologyTimeoutSeconds` bounds the entire snapshot or clip operation, including
+login, recording lookup, retries and the response body. Increase it if legitimate
+video transfers need more time. Interrupted or oversized clips are removed from
+the capture folder. AI and Telegram timeouts apply per attempt, including the
+response body; application shutdown cancels all network and retry waits.
+
+Telegram rate-limit replies are retried after the server's `retry_after` interval.
+Other cameras can still be analysed during notification waits. A camera with a
+pending photo stays reserved, and only one camera uses image/AI processing at a
+time. With `PerfectShotEnabled`, an already valid image is still sent if a later
+snapshot or AI attempt fails.
 
 `MaxSnapshotBytes`, `MaxAIResponseBytes`, and `MaxRecordingClipBytes` bound
 untrusted Synology and AI responses before they are decoded, parsed, or written
 to disk. Keep the defaults unless your cameras legitimately produce larger
 files.
+
+The container's `/health` endpoint also checks capture-directory write access and
+observed pipeline failures or stalled image/AI work. A failed stage stays unhealthy
+until it succeeds again; idle stages have no recent evidence of success. The check
+creates and immediately removes a tiny probe file and never sends a notification.
+For detail, call `GET /Diagnostics` with `X-SynoAI-Token: YOUR_ACCESS_TOKEN` (or the
+usual bearer/query token). It reports queue depths, active operations and the last
+success/failure for each stage. The image token does not authorize this endpoint.
+Diagnostics reset on restart and contain no Telegram credentials or chat IDs.
 
 ## 3. AI Settings
 

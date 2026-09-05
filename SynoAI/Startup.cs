@@ -45,20 +45,23 @@ namespace SynoAI
             services.AddSingleton<ICameraProcessingQueue, CameraProcessingQueue>();
             services.AddSingleton<IRecordingClipQueue, RecordingClipQueue>();
             services.AddSingleton<IDetectionMemory, DetectionMemory>();
+            services.AddSingleton<CameraAnalysisGate>();
+            services.AddSingleton<PipelineDiagnostics>();
             services.AddScoped<IAIService, AIService>();
             services.AddSingleton<ISynologyService, SynologyService>();
             services.AddScoped<ICameraTriggerProcessor, CameraTriggerProcessor>();
             services.AddScoped<IRecordingClipProcessor, RecordingClipProcessor>();
 
-            services.AddHostedService<CaptureCleanupService>();
             services.AddHostedService<AppLifecycleService>();
+            services.AddHostedService<CaptureCleanupService>();
             services.AddHostedService<CameraStatusMonitorService>();
             services.AddHostedService<CameraProcessingWorker>();
             services.AddHostedService<RecordingClipWorker>();
 
             services.AddControllers();
             services.AddHealthChecks()
-                .AddCheck<AIHealthCheck>("codeproject-ai");
+                .AddCheck<AIHealthCheck>("codeproject-ai")
+                .AddCheck<PipelineHealthCheck>("pipeline");
             services.AddSwaggerGen(c =>
             {
                 c.SwaggerDoc("v1", new OpenApiInfo { Title = "SynoAI", Version = "v1" });

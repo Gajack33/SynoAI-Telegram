@@ -31,7 +31,7 @@ namespace SynoAI.AIs.DeepStack
             _httpClient = httpClient ?? throw new ArgumentNullException(nameof(httpClient));
         }
 
-        public async override Task<IEnumerable<AIPrediction>> Process(ILogger logger, Camera camera, byte[] image)
+        public async override Task<IEnumerable<AIPrediction>> Process(ILogger logger, Camera camera, byte[] image, CancellationToken cancellationToken = default)
         {
             Stopwatch stopwatch = Stopwatch.StartNew();
             string providerName = Config.AI == AIType.CodeProjectAIServer ? "CodeProject.AI" : "DeepStackAI";
@@ -53,11 +53,12 @@ namespace SynoAI.AIs.DeepStack
                     try
                     {
                         using MultipartFormDataContent multipartContent = CreateMultipartContent(image, minConfidence);
-                        using CancellationTokenSource cancellationTokenSource = new(TimeSpan.FromSeconds(Config.AITimeoutSeconds));
+                        using CancellationTokenSource cancellationTokenSource = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                        cancellationTokenSource.CancelAfter(TimeSpan.FromSeconds(Config.AITimeoutSeconds));
                         using HttpResponseMessage response = await _httpClient.PostAsync(uri, multipartContent, cancellationTokenSource.Token);
                         if (response.IsSuccessStatusCode)
                         {
-                            DeepStackResponse deepStackResponse = await GetResponse(logger, camera, providerName, response);
+                            DeepStackResponse deepStackResponse = await GetResponse(logger, camera, providerName, response, cancellationTokenSource.Token);
                             if (deepStackResponse?.Success == true)
                             {
                                 IEnumerable<AIPrediction> predictions = (deepStackResponse.Predictions ?? Enumerable.Empty<DeepStackPrediction>())
@@ -93,29 +94,29 @@ namespace SynoAI.AIs.DeepStack
                             return null;
                         }
 
-                        string responseBody = await ReadResponseContentAsync(response.Content);
+                        string responseBody = await ReadResponseContentAsync(response.Content, cancellationTokenSource.Token);
                         logger.LogWarning($"{camera.Name}: {providerName}: Failed to call API with HTTP status code '{response.StatusCode}'. Response: {responseBody}");
                         if (ShouldRetry(response.StatusCode, attempt, maxAttempts))
                         {
-                            await DelayBeforeRetry(logger, camera, providerName, attempt, maxAttempts);
+                            await DelayBeforeRetry(logger, camera, providerName, attempt, maxAttempts, cancellationToken);
                             continue;
                         }
 
                         return null;
                     }
-                    catch (TaskCanceledException ex) when (attempt < maxAttempts)
+                    catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested && attempt < maxAttempts)
                     {
                         logger.LogWarning(ex, "{cameraName}: {providerName}: Request timed out on attempt {attempt} of {maxAttempts}.", camera.Name, providerName, attempt, maxAttempts);
-                        await DelayBeforeRetry(logger, camera, providerName, attempt, maxAttempts);
+                        await DelayBeforeRetry(logger, camera, providerName, attempt, maxAttempts, cancellationToken);
                     }
-                    catch (HttpRequestException ex) when (attempt < maxAttempts)
+                    catch (HttpRequestException ex) when (!cancellationToken.IsCancellationRequested && attempt < maxAttempts)
                     {
                         logger.LogWarning(ex, "{cameraName}: {providerName}: Request failed on attempt {attempt} of {maxAttempts}.", camera.Name, providerName, attempt, maxAttempts);
-                        await DelayBeforeRetry(logger, camera, providerName, attempt, maxAttempts);
+                        await DelayBeforeRetry(logger, camera, providerName, attempt, maxAttempts, cancellationToken);
                     }
                 }
             }
-            catch (TaskCanceledException ex)
+            catch (OperationCanceledException ex) when (!cancellationToken.IsCancellationRequested)
             {
                 logger.LogError(ex, $"{camera.Name}: {providerName}: Request timed out after {Config.AITimeoutSeconds} seconds.");
             }
@@ -157,7 +158,7 @@ namespace SynoAI.AIs.DeepStack
             return attempt < maxAttempts && (status == 408 || status == 429 || status >= 500);
         }
 
-        private static async Task DelayBeforeRetry(ILogger logger, Camera camera, string providerName, int attempt, int maxAttempts)
+        private static async Task DelayBeforeRetry(ILogger logger, Camera camera, string providerName, int attempt, int maxAttempts, CancellationToken cancellationToken)
         {
             int delayMs = Config.HttpRetryDelayMs * attempt;
             if (delayMs <= 0)
@@ -172,7 +173,7 @@ namespace SynoAI.AIs.DeepStack
                 delayMs,
                 attempt + 1,
                 maxAttempts);
-            await Task.Delay(delayMs);
+            await Task.Delay(delayMs, cancellationToken);
         }
 
         /// <summary>
@@ -197,9 +198,9 @@ namespace SynoAI.AIs.DeepStack
         /// </summary>
         /// <param name="message">The message to parse.</param>
         /// <returns>A usable object.</returns>
-        private async Task<DeepStackResponse> GetResponse(ILogger logger, Camera camera, string providerName, HttpResponseMessage message)
+        private async Task<DeepStackResponse> GetResponse(ILogger logger, Camera camera, string providerName, HttpResponseMessage message, CancellationToken cancellationToken)
         {
-            string content = await ReadResponseContentAsync(message.Content);
+            string content = await ReadResponseContentAsync(message.Content, cancellationToken);
             logger.LogDebug($"{camera.Name}: {providerName}: Responded with {content}.");
 
             return JsonConvert.DeserializeObject<DeepStackResponse>(content);
@@ -222,11 +223,11 @@ namespace SynoAI.AIs.DeepStack
             return segments.All(segment => !string.IsNullOrWhiteSpace(segment) && segment != "." && segment != "..");
         }
 
-        private static async Task<string> ReadResponseContentAsync(HttpContent content)
+        private static async Task<string> ReadResponseContentAsync(HttpContent content, CancellationToken cancellationToken)
         {
             if (Config.MaxAIResponseBytes <= 0)
             {
-                return await content.ReadAsStringAsync();
+                return await content.ReadAsStringAsync(cancellationToken);
             }
 
             if (content.Headers.ContentLength.HasValue && content.Headers.ContentLength.Value > Config.MaxAIResponseBytes)
@@ -234,13 +235,13 @@ namespace SynoAI.AIs.DeepStack
                 throw new InvalidDataException("AI response content length exceeded the configured limit.");
             }
 
-            using Stream input = await content.ReadAsStreamAsync();
+            using Stream input = await content.ReadAsStreamAsync(cancellationToken);
             using MemoryStream output = new();
             byte[] buffer = new byte[81920];
             int read;
             long totalRead = 0;
 
-            while ((read = await input.ReadAsync(buffer, 0, buffer.Length)) > 0)
+            while ((read = await input.ReadAsync(buffer, 0, buffer.Length, cancellationToken)) > 0)
             {
                 totalRead += read;
                 if (totalRead > Config.MaxAIResponseBytes)

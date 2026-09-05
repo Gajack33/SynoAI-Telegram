@@ -14,15 +14,21 @@ namespace SynoAI.Services
     {
         private readonly ISynologyService _synologyService;
         private readonly ILogger<CameraStatusMonitorService> _logger;
+        private readonly PipelineDiagnostics _diagnostics;
         private readonly Dictionary<string, CameraStatusTransitionTracker> _trackers =
             new(StringComparer.OrdinalIgnoreCase);
 
+        private readonly Dictionary<(string Camera, ICameraStatusNotifier Notifier), bool> _deliveredStates = new();
+        private readonly Dictionary<(string Camera, ICameraStatusNotifier Notifier), PendingAlert> _pendingAlerts = new();
+
         public CameraStatusMonitorService(
             ISynologyService synologyService,
-            ILogger<CameraStatusMonitorService> logger)
+            ILogger<CameraStatusMonitorService> logger,
+            PipelineDiagnostics diagnostics = null)
         {
             _synologyService = synologyService;
             _logger = logger;
+            _diagnostics = diagnostics;
         }
 
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -68,7 +74,9 @@ namespace SynoAI.Services
 
         internal async Task CheckCameraStatusesAsync(CancellationToken cancellationToken)
         {
-            IEnumerable<SynologyCamera> result = await _synologyService.GetCamerasAsync();
+            using var poll = _diagnostics?.Begin("camera-status", "synology", cancellationToken);
+            IEnumerable<SynologyCamera> result = await _synologyService.GetCamerasAsync(cancellationToken);
+            poll?.Complete(result != null);
             if (result == null)
             {
                 _logger.LogWarning("Camera status check returned no data. Existing states are kept unchanged.");
@@ -95,12 +103,7 @@ namespace SynoAI.Services
                 }
 
                 bool? transition = tracker.Observe(observedOnline);
-                if (!transition.HasValue)
-                {
-                    continue;
-                }
-
-                if (transition.Value)
+                if (transition == true)
                 {
                     _logger.LogInformation(
                         "{cameraName}: Camera is back online (Surveillance Station status {statusCode}: {status}).",
@@ -108,7 +111,7 @@ namespace SynoAI.Services
                         (int)status,
                         status);
                 }
-                else
+                else if (transition == false)
                 {
                     _logger.LogWarning(
                         "{cameraName}: Camera is offline (Surveillance Station status {statusCode}: {status}).",
@@ -117,14 +120,14 @@ namespace SynoAI.Services
                         status);
                 }
 
-                await SendNotificationsAsync(camera, transition.Value, DateTimeOffset.Now, cancellationToken);
+                await SendNotificationsAsync(camera, transition, observedOnline, cancellationToken);
             }
         }
 
         private async Task SendNotificationsAsync(
             Camera camera,
-            bool isOnline,
-            DateTimeOffset changedAt,
+            bool? transition,
+            bool observedOnline,
             CancellationToken cancellationToken)
         {
             List<ICameraStatusNotifier> notifiers = (Config.Notifiers ?? Enumerable.Empty<INotifier>())
@@ -137,32 +140,52 @@ namespace SynoAI.Services
                 .Cast<ICameraStatusNotifier>()
                 .ToList();
 
-            if (notifiers.Count == 0)
-            {
-                _logger.LogInformation(
-                    "{cameraName}: No notifier is configured for camera status changes.",
-                    camera.Name);
-                return;
-            }
-
             foreach (ICameraStatusNotifier notifier in notifiers)
             {
                 cancellationToken.ThrowIfCancellationRequested();
+                var key = (camera.Name, notifier);
+                string diagnosticTarget = $"{camera.Name}/{Config.Notifiers.ToList().IndexOf((INotifier)notifier)}";
+                // Healthy startup is the implicit baseline, without an online notification.
+                _deliveredStates.TryAdd(key, true);
+                if (transition.HasValue)
+                {
+                    _pendingAlerts.Remove(key);
+                    if (_deliveredStates[key] != transition.Value)
+                    {
+                        _pendingAlerts[key] = new PendingAlert(transition.Value, DateTimeOffset.Now);
+                    }
+                    else
+                    {
+                        _diagnostics?.Forget("telegram-status", diagnosticTarget);
+                    }
+                }
+
+                if (!_pendingAlerts.TryGetValue(key, out PendingAlert pending) || pending.IsOnline != observedOnline)
+                {
+                    continue;
+                }
 
                 try
                 {
-                    await notifier.SendCameraStatusAsync(camera, isOnline, changedAt, _logger);
+                    using var operation = _diagnostics?.Begin("telegram-status", diagnosticTarget, cancellationToken);
+                    await notifier.SendCameraStatusAsync(camera, pending.IsOnline, pending.ChangedAt, _logger, cancellationToken);
+                    operation?.Complete(true);
+                    _deliveredStates[key] = pending.IsOnline;
+                    _pendingAlerts.Remove(key);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    throw;
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError(
-                        ex,
-                        "{cameraName}: Failed to send camera {status} notification.",
-                        camera.Name,
-                        isOnline ? "online" : "offline");
+                    // Keep the latest undelivered transition for the next polling interval.
+                    _logger.LogError(ex, "{cameraName}: Camera status notification failed; it will be retried on a later poll.", camera.Name);
                 }
             }
         }
+
+        private sealed record PendingAlert(bool IsOnline, DateTimeOffset ChangedAt);
     }
 
     internal sealed class CameraStatusTransitionTracker

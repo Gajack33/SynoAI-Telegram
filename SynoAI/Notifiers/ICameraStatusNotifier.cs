@@ -1,3 +1,4 @@
+using System.Threading;
 using Microsoft.Extensions.Logging;
 using SynoAI.Models;
 using System;
@@ -8,6 +9,6 @@ namespace SynoAI.Notifiers
     public interface ICameraStatusNotifier
     {
         bool SendCameraStatusNotifications { get; }
-        Task SendCameraStatusAsync(Camera camera, bool isOnline, DateTimeOffset changedAt, ILogger logger);
+        Task SendCameraStatusAsync(Camera camera, bool isOnline, DateTimeOffset changedAt, ILogger logger, CancellationToken cancellationToken = default);
     }
 }

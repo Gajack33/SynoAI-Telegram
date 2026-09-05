@@ -258,6 +258,60 @@ namespace SynoAI.Tests
         }
 
         [Test]
+        public async Task Processor_PerfectShot_PreservesCandidateAfterLaterAiFailure()
+        {
+            FakeHttpClient httpClient = new();
+            Configure(new Dictionary<string, string>
+            {
+                ["PerfectShotEnabled"] = "true",
+                ["MaxSnapshots"] = "3",
+                ["DrawMode"] = "Off",
+                ["Notifiers:0:SendRecordingClip"] = "false"
+            }, httpClient);
+
+            FakeSynologyService synologyService = new(new[]
+            {
+                CreateJpeg(64, 64, SKColors.Red),
+                CreateJpeg(64, 64, SKColors.Lime),
+                CreateJpeg(64, 64, SKColors.Blue)
+            });
+
+            FakeAIService aiService = new(new[]
+            {
+                new[]
+                {
+                    new AIPrediction { Label = "person", Confidence = 60, MinX = 1, MinY = 1, MaxX = 20, MaxY = 20 }
+                },
+                new[]
+                {
+                    new AIPrediction { Label = "person", Confidence = 95, MinX = 1, MinY = 1, MaxX = 20, MaxY = 20 }
+                },
+                null
+            });
+
+            CameraTriggerProcessor processor = new(
+                aiService,
+                synologyService,
+                new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)),
+                new FakeRecordingClipQueue(),
+                new DetectionMemory(),
+                NullLogger<CameraTriggerProcessor>.Instance);
+
+            CameraProcessingStatus status = await processor.ProcessAsync("Entree", CancellationToken.None);
+
+            Assert.That(status, Is.EqualTo(CameraProcessingStatus.ValidObjectDetected));
+            Assert.That(synologyService.SnapshotCalls, Is.EqualTo(3));
+            Assert.That(aiService.ProcessCalls, Is.EqualTo(3));
+            Assert.That(httpClient.Requests.Select(x => x.AbsolutePath), Is.EqualTo(new[] { "/bottoken/sendPhoto" }));
+
+            string savedCapture = Directory.GetFiles(Path.Combine("Captures", "Entree"), "*.jpeg").Single();
+            using SKBitmap bitmap = SKBitmap.Decode(savedCapture);
+            SKColor pixel = bitmap.GetPixel(5, 5);
+            Assert.That(pixel.Green, Is.GreaterThan(pixel.Red));
+            Assert.That(pixel.Green, Is.GreaterThan(pixel.Blue));
+        }
+
+        [Test]
         public async Task Processor_MinimumSizeRejectsSmallPersonFalsePositive()
         {
             FakeHttpClient httpClient = new();
@@ -332,6 +386,53 @@ namespace SynoAI.Tests
             Assert.That(secondStatus, Is.EqualTo(CameraProcessingStatus.NoValidObjectDetected));
             Assert.That(httpClient.Requests.Select(x => x.AbsolutePath), Is.EqualTo(new[] { "/bottoken/sendPhoto" }));
         }
+
+        [Test]
+        public async Task Processor_PerfectShot_PreservesCandidateAfterLaterSnapshotException()
+        {
+            FakeHttpClient client = new();
+            Configure(new Dictionary<string, string>
+            {
+                ["PerfectShotEnabled"] = "true", ["MaxSnapshots"] = "2", ["DrawMode"] = "Off"
+            }, client);
+            FakeSynologyService synology = new(CreateJpeg(64, 64)) { ThrowOnSnapshotCall = 2 };
+            CameraTriggerProcessor processor = new(new FakeAIService(new[] { ValidPerson() }), synology,
+                new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)), new FakeRecordingClipQueue(),
+                new DetectionMemory(), NullLogger<CameraTriggerProcessor>.Instance);
+            Assert.That(await processor.ProcessAsync("Entree", CancellationToken.None), Is.EqualTo(CameraProcessingStatus.ValidObjectDetected));
+            Assert.That(client.Requests, Has.Count.EqualTo(1));
+        }
+
+        [Test]
+        public async Task Processor_AnotherCameraCanFinishWhileFirstNotificationWaits()
+        {
+            FakeHttpClient client = new() { BlockFirstRequest = true };
+            Configure(new Dictionary<string, string>
+            {
+                ["Cameras:1:Name"] = "Garage", ["Cameras:1:MinSizeX"] = "1", ["Cameras:1:MinSizeY"] = "1", ["DrawMode"] = "Off"
+            }, client);
+            using CameraAnalysisGate gate = new();
+            CameraTriggerProcessor processor = new(new FakeAIService(new[] { ValidPerson() }), new FakeSynologyService(CreateJpeg(64, 64)),
+                new FakeCameraQueue(new CameraEnqueueResult(CameraEnqueueStatus.Queued)), new FakeRecordingClipQueue(),
+                new DetectionMemory(), NullLogger<CameraTriggerProcessor>.Instance, gate);
+            using CancellationTokenSource stop = new();
+            Task<CameraProcessingStatus> first = processor.ProcessAsync("Entree", stop.Token);
+            try
+            {
+                await client.FirstRequestArrived.Task.WaitAsync(TimeSpan.FromSeconds(3));
+                var second = await processor.ProcessAsync("Garage", stop.Token).WaitAsync(TimeSpan.FromSeconds(3));
+                Assert.That(second, Is.EqualTo(CameraProcessingStatus.ValidObjectDetected));
+                Assert.That(first.IsCompleted, Is.False);
+            }
+            finally
+            {
+                stop.Cancel();
+                client.ReleaseFirstRequest.TrySetResult();
+                await first;
+            }
+        }
+
+        private static AIPrediction ValidPerson() => new() { Label = "person", Confidence = 95, MinX = 1, MinY = 1, MaxX = 25, MaxY = 25 };
 
         private static CameraController CreateController(ICameraProcessingQueue queue)
         {
@@ -414,13 +515,13 @@ namespace SynoAI.Tests
 
             public int ProcessCalls { get; private set; }
 
-            public Task<IEnumerable<AIPrediction>> ProcessAsync(Camera camera, byte[] image)
+            public Task<IEnumerable<AIPrediction>> ProcessAsync(Camera camera, byte[] image, CancellationToken cancellationToken = default)
             {
                 ProcessCalls++;
                 return Task.FromResult(_predictions.Count > 1 ? _predictions.Dequeue() : _predictions.Peek());
             }
 
-            public Task<bool> WarmupAsync()
+            public Task<bool> WarmupAsync(CancellationToken cancellationToken = default)
             {
                 return Task.FromResult(true);
             }
@@ -441,32 +542,34 @@ namespace SynoAI.Tests
             }
 
             public bool ThrowOnClipDownload { get; set; }
+            public int? ThrowOnSnapshotCall { get; set; }
             public string ClipFilePath { get; set; }
             public int ClipDownloadCalls { get; private set; }
             public int SnapshotCalls { get; private set; }
 
-            public Task InitialiseAsync()
+            public Task InitialiseAsync(CancellationToken cancellationToken = default)
             {
                 return Task.CompletedTask;
             }
 
-            public Task<Cookie> LoginAsync()
+            public Task<Cookie> LoginAsync(CancellationToken cancellationToken = default)
             {
                 return Task.FromResult<Cookie>(null);
             }
 
-            public Task<IEnumerable<SynologyCamera>> GetCamerasAsync()
+            public Task<IEnumerable<SynologyCamera>> GetCamerasAsync(CancellationToken cancellationToken = default)
             {
                 return Task.FromResult<IEnumerable<SynologyCamera>>(Array.Empty<SynologyCamera>());
             }
 
-            public Task<byte[]> TakeSnapshotAsync(string cameraName)
+            public Task<byte[]> TakeSnapshotAsync(string cameraName, CancellationToken cancellationToken = default)
             {
                 SnapshotCalls++;
+                if (SnapshotCalls == ThrowOnSnapshotCall) throw new HttpRequestException("Simulated snapshot failure");
                 return Task.FromResult(_snapshots.Count > 1 ? _snapshots.Dequeue() : _snapshots.Peek());
             }
 
-            public Task<ProcessedFile> DownloadLatestRecordingClipAsync(string cameraName, DateTimeOffset detectedAt, int offsetTimeMs, int playTimeMs)
+            public Task<ProcessedFile> DownloadLatestRecordingClipAsync(string cameraName, DateTimeOffset detectedAt, int offsetTimeMs, int playTimeMs, CancellationToken cancellationToken = default)
             {
                 ClipDownloadCalls++;
 
@@ -486,6 +589,7 @@ namespace SynoAI.Tests
 
         private sealed class FakeRecordingClipQueue : IRecordingClipQueue
         {
+            public int PendingCount => WorkItems.Count;
             public List<RecordingClipWorkItem> WorkItems { get; } = new();
 
             public bool TryEnqueue(RecordingClipWorkItem workItem)
@@ -502,6 +606,7 @@ namespace SynoAI.Tests
 
         private sealed class FakeCameraQueue : ICameraProcessingQueue
         {
+            public int PendingCount => EnqueuedCameraNames.Count;
             private readonly CameraEnqueueResult _enqueueResult;
 
             public FakeCameraQueue(CameraEnqueueResult enqueueResult)
@@ -543,6 +648,9 @@ namespace SynoAI.Tests
             public List<Uri> Requests { get; } = new();
             public HttpStatusCode StatusCode { get; set; } = HttpStatusCode.OK;
             public string ResponseBody { get; set; } = @"{""ok"":true}";
+            public bool BlockFirstRequest { get; set; }
+            public TaskCompletionSource FirstRequestArrived { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+            public TaskCompletionSource ReleaseFirstRequest { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
             public Task<HttpResponseMessage> PostAsync(string requestUri, HttpContent content)
             {
@@ -554,13 +662,15 @@ namespace SynoAI.Tests
                 return PostAsync(requestUri, content, CancellationToken.None);
             }
 
-            public Task<HttpResponseMessage> PostAsync(Uri requestUri, HttpContent content, CancellationToken cancellationToken)
+            public async Task<HttpResponseMessage> PostAsync(Uri requestUri, HttpContent content, CancellationToken cancellationToken)
             {
                 Requests.Add(requestUri);
-                return Task.FromResult(new HttpResponseMessage(StatusCode)
+                if (BlockFirstRequest && Requests.Count == 1)
                 {
-                    Content = new StringContent(ResponseBody)
-                });
+                    FirstRequestArrived.TrySetResult();
+                    await ReleaseFirstRequest.Task.WaitAsync(cancellationToken);
+                }
+                return new HttpResponseMessage(StatusCode) { Content = new StringContent(ResponseBody) };
             }
         }
     }
